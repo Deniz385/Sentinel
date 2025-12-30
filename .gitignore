@@ -1,0 +1,24 @@
+# Python gereksizleri
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Sanal Ortamlar
+venv/
+env/
+.env
+
+# PyInstaller Çıktıları (EXE'yi kodun içine atma, onu Releases kısmına koyacağız)
+build/
+dist/
+*.spec
+
+# Karantina ve Loglar (Gizlilik!)
+KARANTINA_BOLGESI/
+*.log
+*.enc
+karantina_kayitlari.json
+
+# IDE Ayarları
+.vscode/
+.idea/
