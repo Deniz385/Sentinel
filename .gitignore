@@ -22,3 +22,5 @@ karantina_kayitlari.json
 # IDE Ayarları
 .vscode/
 .idea/
+# Güvenlik Anahtarları
+*.key
