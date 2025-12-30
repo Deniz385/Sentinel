@@ -1,0 +1,5 @@
+file,line,type,content_masked,sha256
+test_data\sample_leak.txt,5,EMAIL,de****************om,5a5c7f731245f10fc3a880c5ecc7d0fca2b9366f72d3e4466da0e8bc038d239c
+test_data\sample_leak.txt,7,PHONE,05**********67,5a5c7f731245f10fc3a880c5ecc7d0fca2b9366f72d3e4466da0e8bc038d239c
+test_data\sample_leak.txt,11,EMAIL,ad************om,5a5c7f731245f10fc3a880c5ecc7d0fca2b9366f72d3e4466da0e8bc038d239c
+test_data\secret_archive.zip::gizli_notlar.txt,1,TR_ID,10*******46,N/A

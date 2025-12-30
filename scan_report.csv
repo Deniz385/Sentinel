@@ -1,0 +1,6 @@
+file,line,type,content_masked
+test_data\sample_leak.txt,5,EMAIL,de****************om
+test_data\sample_leak.txt,6,TR_ID,12*******01
+test_data\sample_leak.txt,7,PHONE,05**********67
+test_data\sample_leak.txt,8,CREDIT_CARD,12***************78
+test_data\sample_leak.txt,11,EMAIL,ad************om

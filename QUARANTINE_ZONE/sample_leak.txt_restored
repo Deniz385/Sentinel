@@ -1,0 +1,12 @@
+
+    Merhaba, bu bir test dosyasıdır.
+    
+    Aşağıda hassas veriler bulunmaktadır:
+    1. E-posta adresi: deniz.test@ornek.com
+    2. Geçerli bir TC Kimlik: 12345678901 (Test amaçlı, algoritma tutmayabilir)
+    3. Telefon Numarası: 0555 123 45 67
+    4. Kredi Kartı: 1234-5678-1234-5678
+    
+    Bu satırda hassas veri yok.
+    Ama burada gizli bir mail var: admin@sirket.com
+    
