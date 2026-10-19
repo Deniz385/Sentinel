@@ -42,6 +42,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,docs,pdf,monitor,notify]"
 
+      # YARA derlenmiş bir eklenti gerektirir ve her platform/sürüm
+      # bileşiminde hazır paketi (wheel) olmayabilir. Kurulabildiği yerde
+      # kuruyoruz ki `rules/*.yar` gerçekten derlensin; kurulamadığı yerde
+      # ilgili testler atlanır ve iş düşmez.
+      - name: YARA (en iyi gayret)
+        continue-on-error: true
+        run: pip install -e ".[yara]"
+
       - name: Testler
         run: pytest -q --cov=sentinel --cov-report=term-missing
 
