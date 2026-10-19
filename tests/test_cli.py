@@ -398,3 +398,68 @@ class TestConfig:
         changed = base.replace(ocr=True)
         assert changed.ocr is True
         assert base.ocr is False
+
+
+class TestOutputEncoding:
+    """Çıktı kodlaması, Windows'ta aracı tamamen kullanılamaz kılmıştı.
+
+    Çıktı bir dosyaya ya da boruya yönlendirildiğinde Python, Windows'ta
+    sistemin eski kod sayfasını (cp1252) kullanır; o sayfada ``ş`` yoktur
+    ve ilk Türkçe karakterde ``UnicodeEncodeError`` fırlar. Yani
+    `sentinel doctor > rapor.txt` ya da herhangi bir CI adımı çöküyordu.
+
+    Bu testler alt süreçte gerçek bir yönlendirme kurar ve ortam
+    kodlamasını cp1252'ye zorlar, böylece hata her platformda üretilebilir.
+    """
+
+    ENV = {"PYTHONIOENCODING": "cp1252"}
+
+    def _run(self, project, *args):
+        import subprocess
+        import sys
+
+        env = {**os.environ, **self.ENV}
+        return subprocess.run(
+            [sys.executable, "-m", "sentinel.cli", *args],
+            cwd=project,
+            env=env,
+            capture_output=True,  # gerçek boru: konsol yazıcısı devrede değil
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ("--version",),
+            ("doctor",),
+            ("rules",),
+            ("rules", "--json"),
+            ("scan", "musteriler.txt", "--no-report"),
+            ("vault", "list"),
+        ],
+    )
+    def test_commands_survive_a_legacy_codepage(self, project, args):
+        result = self._run(project, *args)
+        assert result.returncode == EXIT_OK, (
+            f"{' '.join(args)} cp1252 boru hattında düştü:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
+        assert "charmap" not in result.stdout + result.stderr
+        assert "UnicodeEncodeError" not in result.stdout + result.stderr
+
+    def test_turkish_characters_are_not_mangled(self, project):
+        """Çökmemek yetmez: metin de okunabilir kalmalı."""
+        result = self._run(project, "doctor")
+        assert "Şifreli karantina" in result.stdout
+        assert "Gerçek zamanlı izleme" in result.stdout
+
+    def test_report_paths_with_turkish_names(self, project, tmp_path):
+        """Türkçe adlı bir dizine rapor yazmak da çökmemeli."""
+        out = tmp_path / "çıktı raporları"
+        result = self._run(
+            project, "scan", ".", "--output", str(out), "--format", "csv,json", "--quiet"
+        )
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+        assert (out / "scan_results.csv").is_file()

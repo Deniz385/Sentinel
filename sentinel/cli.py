@@ -28,6 +28,38 @@ EXIT_FINDINGS = 1
 EXIT_ERROR = 2
 EXIT_INTERRUPTED = 130
 
+
+def _ensure_utf8_output():
+    """Çıktı akışlarının Türkçe karakterleri taşıyabildiğinden emin olur.
+
+    Windows'ta çıktı bir dosyaya ya da boruya yönlendirildiğinde Python
+    konsol yazıcısını değil, sistemin eski kod sayfasını (genelde cp1252)
+    kullanır. O kod sayfasında ``ş`` yoktur, dolayısıyla ilk Türkçe
+    karakterde ``UnicodeEncodeError`` fırlar:
+
+        sentinel doctor > rapor.txt
+        [HATA] 'charmap' codec can't encode character '\\u015f'
+
+    Bu, aracı Windows'ta her türlü yönlendirmede, betikte ve CI adımında
+    kullanılamaz hâle getiriyordu. UTF-8'e geçmek dosya/boru durumunu
+    doğru yazar; ``errors="replace"`` ise hangi kod sayfası olursa olsun
+    çıktının **asla** çökmemesini garanti eder — bir güvenlik aracı,
+    raporunu yazarken bir harf yüzünden ölmemelidir.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError, AttributeError):
+            # Akış değiştirilemiyorsa (yakalanmış/sarmalanmış olabilir)
+            # en azından kayıp karakterleri çökmeden geçmeyi dene.
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
 _BANNER = r"""
    ____             _   _            _
   / ___|  ___ _ __ | |_(_)_ __   ___| |
@@ -733,6 +765,10 @@ _COMMANDS = {
 
 
 def main(argv=None) -> int:
+    # Herhangi bir şey yazılmadan ÖNCE: Windows'ta yönlendirilmiş çıktı
+    # aksi hâlde ilk Türkçe karakterde çöker.
+    _ensure_utf8_output()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     style = _make_style(args.no_color)
