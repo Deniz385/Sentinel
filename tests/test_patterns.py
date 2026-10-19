@@ -292,6 +292,44 @@ class TestMatcherBehaviour:
         assert "onaylandı" in finding.snippet
         assert VALID_TCKN not in finding.snippet
 
+    def test_snippet_masks_every_finding_on_the_line(self, config):
+        """Alıntı, satırdaki TÜM hassas değerleri maskelemeli.
+
+        Yalnızca odaktaki eşleşmeyi maskelemek, müşteri CSV'si gibi
+        satırında birkaç hassas alan olan dosyalarda — DLP'nin en tipik
+        hedefi — raporun koruduğunu iddia ettiği verinin neredeyse
+        tamamını sızdırması demektir: kart bulgusunun alıntısı IBAN'ı,
+        IBAN bulgusunun alıntısı kartı açıkta bırakır.
+        """
+        hassas = [VALID_VISA, VALID_TR_IBAN, VALID_TCKN, "deniz@adu.edu.tr"]
+        line = f"2026-01-14,ACME,{VALID_VISA},{VALID_TR_IBAN},{VALID_TCKN},deniz@adu.edu.tr"
+
+        findings = Matcher(config).scan_text(line, "musteriler.csv")
+        assert len(findings) >= 4
+
+        for finding in findings:
+            for deger in hassas:
+                assert deger not in finding.snippet, (
+                    f"{finding.type} alıntısı {deger!r} değerini açıkta bıraktı: "
+                    f"{finding.snippet}"
+                )
+                assert deger not in finding.content_masked
+
+    def test_snippet_keeps_non_sensitive_context(self, config):
+        """Maskeleme bağlamı yok etmemeli; alıntının amacı bu."""
+        line = f"Fatura ACME Ltd icin kart {VALID_VISA} ile odendi"
+        finding = Matcher(config).scan_text(line, "x.txt")[0]
+        assert "ACME Ltd" in finding.snippet
+        assert "odendi" in finding.snippet
+
+    def test_suppressed_values_are_also_masked_in_snippets(self, config):
+        """Bastırılan bir eşleşme bile alıntıda açık yazılmamalı."""
+        line = f"TC {VALID_TCKN} ve ornek AKIAIOSFODNN7EXAMPLE"
+        findings = Matcher(config).scan_text(line, "x.txt")
+        assert findings
+        for finding in findings:
+            assert "AKIAIOSFODNN7EXAMPLE" not in finding.snippet
+
     def test_line_numbers_are_correct(self, config):
         text = "\n".join(["bos", "", f"TC: {VALID_TCKN}", "son"])
         findings = Matcher(config).scan_text(text, "x.txt")
