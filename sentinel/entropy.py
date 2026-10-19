@@ -46,6 +46,54 @@ _OBVIOUS_NOISE_RE = re.compile(
     r")$"
 )
 
+#: Kimlik/yol parçalarını ayıran karakterler.
+_SEGMENT_RE = re.compile(r"[_\-/=+]")
+
+#: Artan/azalan ardışık karakter dizisi bu uzunluğa ulaşırsa, dizge
+#: rastgele değil *sıralı* demektir.
+_SEQUENTIAL_RUN = 6
+
+
+def _has_sequential_run(token: str, length: int = _SEQUENTIAL_RUN) -> bool:
+    """``abcdef`` / ``0123456789`` gibi sıralı bir dizi içeriyor mu?
+
+    Alfabe ve karakter kümesi sabitleri (``string.ascii_letters``
+    kopyaları, base64/hex/base58 alfabeleri) tanım gereği mümkün olan en
+    yüksek entropiye sahiptir — her karakter tam bir kez geçer. Yani
+    entropi onları sır sanmaya en yatkın olduğu yerdir. Rastgele üretilmiş
+    gerçek bir sır ise altı karakterlik ardışık bir diziyi pratikte hiç
+    içermez.
+    """
+    if len(token) < length:
+        return False
+
+    ascending = descending = 1
+    # strict=False bilinçli: `token[1:]` tasarım gereği bir kısa.
+    for previous, current in zip(token, token[1:], strict=False):
+        step = ord(current) - ord(previous)
+        ascending = ascending + 1 if step == 1 else 1
+        descending = descending + 1 if step == -1 else 1
+        if ascending >= length or descending >= length:
+            return True
+    return False
+
+
+def _looks_like_identifier(token: str) -> bool:
+    """Kod kimliği ya da yol gibi mi görünüyor?
+
+    ``return_when=FIRST_COMPLETED``, ``Qt_AlignmentFlag=AlignHCenter``,
+    ``usr/local/share`` gibi dizgeler ayraçla bölündüğünde her parçası ya
+    tamamen harf ya tamamen rakamdır. Rastgele bir sırda ise en az bir
+    parça harf ve rakamı birlikte taşır (``K7MDENG``, ``AbCd1234``).
+
+    Kural yalnızca **ayraç içeren** dizgelere uygulanır; tek parça bir
+    dizge gerçekten rastgele olabilir, onu entropiye bırakırız.
+    """
+    segments = [part for part in _SEGMENT_RE.split(token) if part]
+    if len(segments) < 2:
+        return False
+    return all(part.isalpha() or part.isdigit() for part in segments)
+
 
 def shannon_entropy(text: str) -> float:
     """Metnin Shannon entropisini (bit/karakter) döndürür."""
@@ -93,6 +141,13 @@ def is_high_entropy(token: str, threshold: float = 4.0, min_length: int = 20) ->
         return False
     # Tek karakter sınıfından oluşan uzun diziler (aaaa..., 1111...) sır değil.
     if len(set(token)) <= 4:
+        return False
+    # Kaynak kodu taranırken en sık gelen iki yanlış pozitif sınıfı:
+    # alfabe sabitleri ve kimlik/yol ifadeleri. İkisi de yüksek entropilidir
+    # ama rastgele değildir; entropiden önce elenirler.
+    if _has_sequential_run(token):
+        return False
+    if _looks_like_identifier(token):
         return False
     return shannon_entropy(token) >= _charset_threshold(token, threshold)
 

@@ -50,6 +50,69 @@ class TestEntropy:
     def test_noise_is_not_a_secret(self, token):
         assert not is_high_entropy(token)
 
+    @pytest.mark.parametrize(
+        "token",
+        [
+            # Alfabe/karakter kümesi sabitleri. Her karakter tam bir kez
+            # geçtiği için entropileri mümkün olan EN YÜKSEK değerdir —
+            # yani entropi kuralının en çok yanıldığı yer burasıdır.
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=-_",
+            "0123456789abcdefABCDEF",
+            "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+            "abcdefghijklmnopqrstuvwxyz",
+            "ZYXWVUTSRQPONMLKJIHGFEDCBA",
+        ],
+    )
+    def test_alphabet_constants_are_not_secrets(self, token):
+        """Sıralı dizgeler rastgele değildir, entropileri yüksek olsa da."""
+        assert not is_high_entropy(token)
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            # Kod kimlikleri ve yollar: ayraçla bölününce her parça ya
+            # tamamen harf ya tamamen rakam. Kaynak kodu taranırken
+            # bunlardan binlercesi geçer.
+            "return_when=FIRST_COMPLETED",
+            "Qt_AlignmentFlag=AlignHCenter",
+            "usr/local/share/applications",
+            "COMPONENT_NAME=PRIMARY_DATABASE",
+            "very_long_snake_case_identifier_name",
+        ],
+    )
+    def test_code_identifiers_are_not_secrets(self, token):
+        assert not is_high_entropy(token)
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            # Yeni buluşsallar gerçek sırları ELEMEMELİ.
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKE2",  # AWS gizli anahtar biçimi
+            "Zx9Kq2mWpL7vR4tY8nB3cF6hJ1sD5gA0uE",
+            "a3f9c1e7b5d2084619fcae73bd5102f8ea",  # hex
+            "ghp_AbCd1234EfGh5678IjKl9012MnOp3456",  # ayraçlı ama parçası karışık
+            "xoxb-9F2kQ7mW-pL4vR8tY-nB3cF6hJ1sD5gA",
+        ],
+    )
+    def test_real_secrets_still_detected(self, token):
+        assert is_high_entropy(token)
+
+    def test_sequential_run_detection(self):
+        from sentinel.entropy import _has_sequential_run
+
+        assert _has_sequential_run("xx123456xx")
+        assert _has_sequential_run("fedcba")
+        assert not _has_sequential_run("x1y2z3a4b5")
+        assert not _has_sequential_run("abc")  # çok kısa
+
+    def test_identifier_shape_needs_a_separator(self):
+        """Ayraçsız tek parça bir dizge gerçekten rastgele olabilir."""
+        from sentinel.entropy import _looks_like_identifier
+
+        assert _looks_like_identifier("FIRST_COMPLETED")
+        assert not _looks_like_identifier("Zx9Kq2mWpL7vR4tY")
+        assert not _looks_like_identifier("ghp_AbCd1234EfGh")  # parça karışık
+
     def test_hex_threshold_is_charset_aware(self):
         """Hex alfabesi en fazla 4 bit/karakter taşır; base64 eşiği onu kaçırır."""
         hex_secret = "a3f9c1e7b5d2084619fcae73bd5102f8ea"

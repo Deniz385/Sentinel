@@ -4,7 +4,7 @@
 GUI açılmadan tek bir dosyayı kasadan geri almak için. Tkinter varsa
 dosya seçici açar; yoksa komut satırı argümanıyla çalışır:
 
-    python restore_tool.py KARANTINA_BOLGESI/1700000000_ab12cd34_veri.txt.enc
+    python restore_tool.py KARANTINA_BOLGESI/<zaman>_<ozet>_veri.txt.enc
 
 `sentinel vault restore <ad>` komutu da aynı işi yapar.
 """
