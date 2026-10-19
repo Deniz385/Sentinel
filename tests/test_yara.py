@@ -43,11 +43,19 @@ class TestGracefulDegradation:
         assert engine.error
 
     def test_empty_directory_is_reported(self, tmp_path):
+        """Motor kapalıysa nedenini *söylemeli*, sessizce yutmamalı.
+
+        Kesin mesaj ortama bağlıdır: yara-python kuruluysa "kural
+        bulunamadı", değilse "yara-python kurulu değil". İkisi de geçerli
+        bir açıklamadır; testin ilgilendiği şey kullanıcının sebepsiz
+        bırakılmaması. Mesajın kendisi :class:`TestRules` içinde,
+        yara kuruluyken doğrulanır.
+        """
         directory = tmp_path / "bos"
         directory.mkdir()
         engine = YaraEngine(str(directory))
         assert not engine.enabled
-        assert "bulunamadı" in engine.error
+        assert engine.error
 
     def test_engine_does_not_break_the_scan_without_yara(self, tmp_path):
         """Motor kapalıyken bile `yara_enabled=True` tarama yapmalı."""
@@ -77,6 +85,14 @@ class TestRules:
     def test_repository_rules_compile(self, engine):
         assert engine.rules is not None
         assert engine.error is None
+
+    def test_empty_rules_directory_names_the_reason(self, tmp_path):
+        """yara kuruluyken, boş dizinin gerekçesi açıkça söylenmeli."""
+        directory = tmp_path / "bos"
+        directory.mkdir()
+        engine = YaraEngine(str(directory))
+        assert not engine.enabled
+        assert "bulunamadı" in engine.error
 
     def test_private_key_rule_fires(self, engine, tmp_path):
         path = tmp_path / "id_rsa"
