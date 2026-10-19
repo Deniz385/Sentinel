@@ -55,7 +55,11 @@ def tree(tmp_path):
             if isinstance(content, bytes):
                 path.write_bytes(content)
             else:
-                path.write_text(content, encoding="utf-8")
+                # Metin bile olsa bayt olarak yaz: `write_text` Windows'ta
+                # `\n` -> `\r\n` çevirisi yapar ve dosya baytları testin
+                # beklediğinden farklı olur. Hash ve bayt karşılaştırması
+                # yapan testler yalnızca Windows'ta düşer.
+                path.write_bytes(content.encode("utf-8"))
         return tmp_path
 
     return build

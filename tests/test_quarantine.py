@@ -43,9 +43,17 @@ def vault(tmp_path, monkeypatch):
 
 @pytest.fixture
 def victim(tmp_path):
+    """Kurbanı **bayt olarak** yazar.
+
+    `write_text` Windows'ta `\\n` -> `\\r\\n` çevirisi yapar, yani diskteki
+    baytlar `SECRET.encode()`'dan farklı olur. Kasa (doğru biçimde)
+    *dosya baytlarını* hash'lediği için manifest testi yalnızca Windows'ta
+    düşüyordu. Donanımı bayt-kesin yazmak, testi platformdan bağımsız
+    kılar ve ölçtüğü şeyi (adli bilişim hash'i) bozmadan bırakır.
+    """
     path = tmp_path / "veri" / "gizli.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(SECRET, encoding="utf-8")
+    path.write_bytes(SECRET.encode("utf-8"))
     return path
 
 
@@ -83,6 +91,11 @@ class TestQuarantine:
         assert victim.read_bytes() == original
 
     def test_manifest_records_provenance(self, vault, victim):
+        # Donanımın bayt-kesin yazdığını önce doğrula: aksi hâlde aşağıdaki
+        # hash karşılaştırması platforma göre değişir ve hata, kasayı
+        # suçlayan anlaşılmaz bir mesaja dönüşür.
+        assert victim.read_bytes() == SECRET.encode("utf-8")
+
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
         items = vault.list_items()
