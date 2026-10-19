@@ -1,8 +1,15 @@
 name: CI
 
 on:
+  # `push` YALNIZCA varsayılan dalda. Bir dala push, o dalın açık bir
+  # PR'ı varsa zaten `pull_request` olayını da tetikler; ikisinin
+  # `github.ref`i farklı olduğu için (refs/heads/... ve refs/pull/N/merge)
+  # aşağıdaki eşzamanlılık grubuna da düşmezler. Sonuç: her push'ta iki
+  # tam çalışma, yani CI dakikalarının iki katı harcanması.
+  #
+  # PR'ı olmayan bir dalda CI çalıştırmak için `workflow_dispatch` var.
   push:
-    branches: ["main", "claude/**"]
+    branches: ["main"]
   pull_request:
   workflow_dispatch:
 
@@ -11,7 +18,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Bir PR'a üst üste push atıldığında eskisini iptal et; ama varsayılan
+  # dalda her commit'in kendi sonucu olmalı (Code Scanning temel çizgisi
+  # ve sürüm geçmişi için), orada iptal etme.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
