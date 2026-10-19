@@ -174,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--quarantine", action="store_true", help="Riskli dosyaları şifreleyip izole et"
     )
     scan.add_argument("--shred", action="store_true", help="Orijinali üzerine yazarak sil")
+    scan.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Değişmemiş dosyaları önbellekten geç (karantina ile birlikte kullanılamaz)",
+    )
+    scan.add_argument("--cache-path", help="Artımlı tarama önbelleği dosyası")
+    scan.add_argument(
+        "--clear-cache", action="store_true", help="Önbelleği sil ve tam tarama yap"
+    )
     scan.add_argument("--baseline", help="Baz çizgisi dosyası (bulguları bastır)")
     scan.add_argument(
         "--write-baseline", help="Mevcut bulguları baz çizgisi olarak kaydet"
@@ -257,12 +266,15 @@ def _load_config(args) -> ScanConfig:
         "baseline": "baseline_path",
         "webhook": "webhook_url",
         "audit_log": "audit_log",
+        "cache_path": "cache_path",
     }
     for arg_name, field_name in simple.items():
         value = getattr(args, arg_name, None)
         if value not in (None, ""):
             overrides[field_name] = value
 
+    if getattr(args, "incremental", False):
+        overrides["incremental"] = True
     if getattr(args, "ocr", False):
         overrides["ocr"] = True
     if getattr(args, "quarantine", False):
@@ -317,6 +329,8 @@ def cmd_scan(args, style: _Style) -> int:
             f"OCR: {'açık' if config.ocr else 'kapalı'} · "
             f"Arşiv: {'açık' if config.archive_enabled else 'kapalı'}"
         )
+        if config.incremental and not config.quarantine:
+            print(f"  Artımlı    : açık · önbellek {_cache_path(config)}")
         if config.quarantine:
             print(
                 style.yellow(
@@ -325,6 +339,28 @@ def cmd_scan(args, style: _Style) -> int:
                 )
             )
         print()
+
+    if getattr(args, "clear_cache", False):
+        from sentinel.cache import clear_cache
+
+        path = _cache_path(config)
+        removed = clear_cache(path)
+        if not args.quiet:
+            print(
+                f"  Önbellek silindi: {path}"
+                if removed
+                else f"  Silinecek önbellek yok: {path}"
+            )
+
+    if config.incremental and config.quarantine:
+        # Sessizce yok saymak yerine söyle: kullanıcı hızlı bir tarama
+        # beklerken tam tarama alacak ve nedenini bilmeli.
+        print(
+            style.yellow(
+                "  [UYARI] Karantina açık — artımlı önbellek kullanılmayacak. "
+                "Veri silen bir karar bayat kanıta dayanamaz."
+            )
+        )
 
     def log(message: str):
         if args.verbose:
@@ -401,6 +437,12 @@ def cmd_scan(args, style: _Style) -> int:
     return EXIT_OK
 
 
+def _cache_path(config) -> str:
+    from sentinel.cache import DEFAULT_CACHE_NAME
+
+    return config.cache_path or DEFAULT_CACHE_NAME
+
+
 def _rule_defs(config):
     from sentinel.patterns import get_pattern_defs
 
@@ -412,6 +454,11 @@ def _rule_defs(config):
 def _print_summary(result, style: _Style, quiet: bool):
     counts = result.counts_by_severity()
     total = len(result.findings)
+    cached = (
+        style.dim(f"  ({result.files_cached} dosya önbellekten)")
+        if result.files_cached
+        else ""
+    )
 
     if total == 0:
         print(
@@ -419,14 +466,22 @@ def _print_summary(result, style: _Style, quiet: bool):
                 f"  ✓ TEMİZ — {result.files_scanned} dosya tarandı, "
                 f"hassas veri bulunamadı. ({result.duration:.2f} sn)"
             )
+            + cached
         )
         return
 
+    unique = result.unique_count
+    # "207 bulgu" analiste 207 iş kalemi olduğunu söyler; oysa aynı
+    # anahtarın 40 kopyası tek iptalle kapanır. İkisini birlikte yaz.
+    bulgu = f"{total} bulgu"
+    if unique != total:
+        bulgu += f" / {unique} tekil sır"
     print(
         style.bold(
-            f"  Risk skoru: {result.risk_score}/100  ·  {total} bulgu  ·  "
+            f"  Risk skoru: {result.risk_score}/100  ·  {bulgu}  ·  "
             f"{result.files_scanned} dosya  ·  {result.duration:.2f} sn"
         )
+        + cached
     )
     parts = []
     for severity in sorted(Severity, key=lambda s: -s.rank):
@@ -438,6 +493,36 @@ def _print_summary(result, style: _Style, quiet: bool):
 
     if result.quarantined:
         print(style.yellow(f"  {len(result.quarantined)} dosya karantinaya alındı."))
+
+    _print_shared_secrets(result, style)
+
+
+def _print_shared_secrets(result, style: _Style, limit: int = 5):
+    """Birden fazla dosyaya kopyalanmış sırları öne çıkarır.
+
+    Bir sır 40 dosyada geçiyorsa listeyi 40 satır gezmek yerine tek
+    satırda görmek gerekir: iş, o anahtarı iptal etmektir.
+    """
+    shared = result.shared_secrets()
+    if not shared:
+        return
+    print()
+    print(
+        style.bold(
+            f"  Birden fazla dosyaya kopyalanmış {len(shared)} sır "
+            "(her biri tek iptalle kapanır):"
+        )
+    )
+    for group in shared[:limit]:
+        severity = group.severity_enum
+        print(
+            f"    {style.severity(severity, severity.icon)} "
+            f"{group.type:<22} {group.file_count} dosyada  "
+            f"{style.dim(group.content_masked)}"
+        )
+    remaining = len(shared) - limit
+    if remaining > 0:
+        print(style.dim(f"    … ve {remaining} sır daha (tam liste: raporlar)"))
 
 
 def _print_findings(result, style: _Style, limit: int = 40):

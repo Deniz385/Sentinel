@@ -46,6 +46,10 @@ baseline.json
 logs/
 *.log
 
+# --- Artımlı tarama önbelleği (yerel durum; makineye özgüdür) ---
+.sentinel-cache.json
+.sentinel-cache.json.tmp
+
 # --- Üretilen test verisi (52 MB'lık dosya v3.0'da commit edilmişti) ---
 big_test_data.txt
 big_*.txt

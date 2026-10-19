@@ -31,6 +31,8 @@ listede eşit göstermez.
 | **Entropi taraması** | Adlandırılmış deseni olmayan rastgele sırları yakalar |
 | **Biçim desteği** | Metin/kod · PDF · Word · Excel · PowerPoint · **ZIP (özyinelemeli)** · görsel (OCR) |
 | **5 kademeli önem derecesi** | `info` → `critical`, 0-100 toplu risk skoru |
+| **Çapraz dosya korelasyonu** | Aynı sırrın tüm kopyaları tek kalemde: "21 bulgu / 1 tekil sır". Eşleştirme parmak izi üzerinden, değer hiç açılmadan |
+| **Artımlı tarama** | `--incremental` ile değişmemiş dosyalar atlanır (ölçüm: 400 dosya 0,87 sn → **0,03 sn**) |
 | **Yanlış pozitif yönetimi** | Allowlist (yol/değer/parmak izi/regex) · satır içi `sentinel:ignore` · baz çizgisi |
 | **6 rapor biçimi** | HTML panosu · CSV · JSON · **SARIF** · Markdown · PDF |
 | **Şifreli karantina** | AES-256-GCM, doğrulanmış silme, bütünlük denetimi |
@@ -94,6 +96,34 @@ sentinel scan . --ocr                         # görselleri de tara
 sentinel scan . -j 8                          # 8 paralel işçi
 sentinel scan . --verbose                     # her bulguyu ekrana yaz
 ```
+
+### Artımlı tarama
+
+Büyük bir paylaşımı düzenli olarak taradığınızda, değişmemiş dosyaları
+tekrar okumanın anlamı yok:
+
+```bash
+sentinel scan /mnt/paylasim --incremental                  # değişmemişleri atla
+sentinel scan /mnt/paylasim --incremental --cache-path /var/lib/sentinel.json
+sentinel scan /mnt/paylasim --incremental --clear-cache    # önbelleği sıfırla
+```
+
+Ölçüm (400 dosya · 4,3 MB): tam tarama **0,87 sn**, tamamı önbellekten
+**0,03 sn**, bir dosya değişmişken **0,04 sn**.
+
+Önbelleğin güvenli olması için konan sınırlar:
+
+- **Varsayılan kapalı.** Araç sorulmadan "bu dosya değişmemiş"
+  varsayımına dayanmaz.
+- Kural kataloğu, yapılandırma ya da Sentinel sürümü değişirse önbellek
+  **tamamen** düşer — bayat bir kayıt yeni kuralın bulacağı sırrı gizler.
+- Okuma hatası alan dosyalar önbelleğe **yazılmaz**; kilitli bir dosya
+  sonsuza kadar görünmez olmaz.
+- `--quarantine` ile birlikte önbellek **hiç kullanılmaz**: veri silen bir
+  karar bayat kanıta dayanamaz (CLI bunu uyarıyla söyler).
+- Tazelik ölçütü `(mtime, boyut)` bir sezgidir, kanıt değil. mtime'ı geri
+  alıp boyutu koruyan bir değişiklik önbelleği atlatır — adli kesinlik
+  gerekiyorsa artımlı tarama kapalı kalmalı.
 
 ### Kuralları görmek
 
@@ -197,6 +227,9 @@ archive_enabled: true
 ocr: false
 workers: 0            # 0 = CPU sayısına göre otomatik
 
+incremental: false    # değişmemiş dosyaları önbellekten geç
+# cache_path: .sentinel-cache.json
+
 allowlist:
   paths: ["tests/**", "test_data/**"]
   values: []
@@ -213,6 +246,7 @@ allowlist:
 | `SENTINEL_WEBHOOK_URL` | Discord / Slack / Teams bildirim adresi |
 | `SENTINEL_FINGERPRINT_SALT` | Parmak izi tuzu (kuruma özel korelasyon) |
 | `SENTINEL_WORKERS`, `SENTINEL_OCR`, `SENTINEL_MIN_SEVERITY` | Tarama ayarları |
+| `SENTINEL_INCREMENTAL`, `SENTINEL_CACHE_PATH` | Artımlı tarama |
 
 ---
 
@@ -263,11 +297,17 @@ result = Scanner("veri", config=config).scan()
 print(result.risk_score, "/100")
 for finding in result.findings:
     print(finding.severity, finding.type, finding.file, finding.content_masked)
+
+# Bulgu değil, kapatılacak iş kalemi: aynı değerin kopyaları tek grupta.
+print(len(result.findings), "bulgu /", result.unique_count, "tekil sır")
+for group in result.shared_secrets():
+    print(group.type, group.file_count, "dosyada", group.content_masked)
 ```
 
 `Finding` nesneleri **asla açık hassas veri taşımaz**: `content_masked`
 maskelenmiş değeri, `fingerprint` ise veriyi sızdırmadan korelasyon
-kurmaya yarayan HMAC-SHA256 kimliğini verir.
+kurmaya yarayan HMAC-SHA256 kimliğini verir. `SecretGroup` aynı güvenceyi
+taşır — gruplama parmak izi üzerinden yapılır, değer hiç açılmaz.
 
 ---
 
@@ -292,6 +332,8 @@ sentinel/
   redaction.py     maskeleme + HMAC parmak izi
   allowlist.py     yanlış pozitif bastırma + baz çizgisi
   matcher.py       metin → bulgu (doğrula, bastır, örtüşme çöz, tekilleştir)
+  correlation.py   bulgu → tekil sır (çapraz dosya gruplama)
+  cache.py         artımlı tarama önbelleği (geçersizleştirme kuralları dâhil)
   extractors/      plain · pdf · office · archive · image
   engine.py        paralel tarama, akışlı okuma, iptal, ilerleme
   quarantine.py    AES-256-GCM kasa (eski formatı da okur)

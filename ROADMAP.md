@@ -112,7 +112,97 @@ Scanning) · `sentinel precommit` git kancası · entropi tabanlı generic sır
 avı · YARA motoru (`rules/*.yar` artık gerçekten çalışıyor) · denetim
 izi (JSONL audit log) · `--fail-on` ile CI kapısı.
 
-### Faz 4 — Sıradaki (bu çalışmanın kapsamı dışında)
+### Faz 4 — Ölçümden çıkan geliştirmeler ✅
+
+v4.0 yeşile döndükten sonra "daha ne yapılabilir?" sorusunu tahminle
+değil **ölçümle** yanıtladım. Üç ölçüm, bu fazın gerekçesidir:
+
+| Ölçüm | Sonuç |
+|---|---|
+| Modül başına test kapsamı | `notify.py` **%0** (gece 3'te birini uyandıracak webhook hiç çalıştırılmamış), `monitor.py` %27, `extractors/image.py` %36, `extractors/pdf.py` %54; toplam %81 |
+| Çapraz dosya tekrarı | Aynı 2 sırrı taşıyan 5 dosya → **10 bulgu, 2 tekil sır** |
+| Profil (40.000 satır) | **1.000.000 `re.search` çağrısı** (satır başına ~25 desen); `_candidates` 1,0 sn + `re.search` 0,93 sn / toplam 3,4 sn |
+
+#### 4.1 Çapraz dosya korelasyonu ✅
+
+**Sorun.** "207 bulgu" analiste 207 iş kalemi olduğunu söyler. Oysa aynı
+AWS anahtarının 40 kopyası **tek bir iptalle** kapanır. Bulgu sayısı iş
+yükünü değil kopyalama alışkanlığını ölçüyordu.
+
+**Çözüm.** `sentinel/correlation.py`: bulgular `(kural, parmak izi)`
+üzerinden tekil sırlara indirgenir. Parmak izi HMAC-SHA256 olduğu için
+**değer hiçbir yerde açılmadan** kopyalar eşleştirilebilir. Raporların
+hepsi (CLI özeti, HTML panosu, Markdown, JSON, PDF) artık iki sayıyı
+birlikte verir: *bulgu* ve *tekil sır*. Birden fazla dosyaya yayılmış
+sırlar ayrı bir bölümde, en yaygın önce.
+
+Kenar durumları test altında: YARA bulguları (tek değere değil dosyanın
+tamamına uyarlar) **asla** birleştirilmez; bir değer farklı dosyalarda
+farklı derece aldıysa grup en kötü durumu gösterir; konum listesi
+kırpılır ama dosya sayısı tam kalır. Ayrı bir test, grup çıktısının açık
+hassas değer taşımadığını doğrular.
+
+#### 4.2 Artımlı tarama ✅
+
+**Sorun.** 500 GB'lık bir paylaşımı her gece baştan taramak, o
+paylaşımın %99'u değişmemişken, harcanan sürenin neredeyse tamamının
+israf olması demek.
+
+**Çözüm.** `sentinel/cache.py`: `(yol → mtime_ns, boyut, bulgular)`
+kaydı. `sentinel scan --incremental`.
+
+| 400 dosya · 4,3 MB | Süre |
+|---|---|
+| Tam tarama | 0,87 sn |
+| Tamamı önbellekten | **0,03 sn** (≈29×) |
+| 1 dosya değişmiş | 0,04 sn (399 önbellekten) |
+
+Bir güvenlik aracında önbellek, yanlış kurgulandığında **sızıntıyı
+görünmez yapan** bir mekanizmadır. Bu yüzden dört kural koda ve testlere
+gömülü:
+
+1. **Kural kataloğu, yapılandırma ya da sürüm değişirse önbellek tamamen
+   düşer.** Tek bir bayat kayıt, yeni bir kuralın bulacağı sırrı gizler.
+2. **Geçici hatalar önbelleğe alınmaz.** Kilitli bir dosya sonsuza kadar
+   görünmez olmamalı.
+3. **Karantina açıkken önbellek hiç kullanılmaz.** Veri *silen* bir
+   karar bayat kanıta dayanamaz; CLI bunu sessizce yapmaz, uyarır.
+4. **Varsayılan kapalı.** Araç, sorulmadan "bu dosya değişmemiş"
+   varsayımına dayanmaz.
+
+Bilinen ödün, gizlenmek yerine teste çivilenmiştir
+(`test_mtime_rollback_is_a_known_limitation`): tazelik ölçütü
+`(mtime, boyut)` bir *sezgidir*, kanıt değil. mtime'ı geri alıp boyutu
+koruyan bir değişiklik önbelleği atlatır. Adli kesinlik gerektiğinde
+artımlı tarama kapalı kalmalı.
+
+#### 4.3 Hâlâ açık olanlar (öncelik sırasıyla)
+
+1. **Ham hız.** Tek iş parçacığında 2–3 MB/sn, 500 GB'lık bir paylaşımda
+   günler demek. Seçenekler: birleşik tek regex (3–5×), hyperscan
+   (10–100×), çekirdeğin Rust'a taşınması (20–50×). Hangisine
+   girişmeden önce prototipleyip ölçmek gerekir — ön süzgeçte bir
+   "iki kademeli birleşik regex" denemesi ölçümde **hiç kazanç
+   vermediği için geri alınmıştı**; aynı hatayı tekrarlamamak lazım.
+2. **Yapısal veri / kolon farkındalığı.** Luhn'dan geçen sipariş
+   numarası sorununun ilkeli çözümü satır değil **kolon** görmekten
+   geçiyor: CSV başlığı `siparis_no` ise kart kuralı o kolonda
+   çalışmamalı.
+3. **Ölçülen test boşlukları.** `notify.py` %0 kapsam kabul edilemez:
+   webhook, bulgu *olduğunda* susarsa kimse fark etmez.
+4. **Karantina anahtar yönetimi.** Kendi demomda, geçici anahtarla
+   karantinaya aldığım bir dosyayı kalıcı olarak kaybettim — belgelenmiş
+   riskin canlı gösterimi. Çoklu alıcı, anahtar emaneti (escrow) ve
+   rotasyon gerekli.
+5. **Akışlı çıktı.** Tüm bulgular bellekte tutuluyor; milyonlarca
+   bulguda rapor yazımı değil taramanın kendisi düşer.
+6. **Düzeltme (remediation) iş akışı.** Bulmak işin yarısı; sahip atama,
+   durum takibi, yeniden tarama ile kapatma eksik.
+7. **Gözden geçirilecek karar:** entropi taramasının varsayılan açık
+   olması. Kendi kaynağımızda 5 yanlış pozitif üretti (düzeltildi), ama
+   her kaynak ağacında benzer sınıflar var.
+
+### Faz 5 — Uzun vade (bu çalışmanın kapsamı dışında)
 - E-posta (`.eml`, `.msg`) ve `.pst` çıkarıcıları
 - Veritabanı tarayıcıları (PostgreSQL / MySQL / MSSQL kolon profilleme)
 - S3 / Azure Blob / Google Drive konnektörleri

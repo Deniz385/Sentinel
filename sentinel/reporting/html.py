@@ -26,6 +26,29 @@ MAX_TABLE_ROWS = 2000
 #: Tür grafiğinde gösterilecek en fazla kategori; kalanı "Diğer"e katlanır.
 MAX_TYPE_BARS = 8
 
+#: "Yayılmış sırlar" bölümünde gösterilecek en fazla satır ve satır başına
+#: en fazla dosya adı. Bir sır 10.000 dosyada geçiyorsa hepsini basmanın
+#: faydası yok; sayı + örnek yol analiste yeter (tam liste JSON raporunda).
+MAX_GROUP_ROWS = 50
+MAX_GROUP_FILES = 4
+
+
+def _relative(path: str, base: str) -> str:
+    """Yolu hedefe göre kısaltır.
+
+    Özet bloğunda yedi dosyanın mutlak yolunu yan yana basmak, satırı
+    dolduran bir gürültü duvarı üretiyor ve asıl bilgiyi (hangi dosyalar)
+    gizliyordu. Hedefin dışındaki yollar olduğu gibi bırakılır — kısaltma
+    uğruna yanlış yer gösterilmez.
+    """
+    if not base:
+        return path
+    try:
+        relative = os.path.relpath(path, base)
+    except ValueError:  # Windows: farklı sürücüler
+        return path
+    return path if relative.startswith("..") else relative
+
 
 def _severity_rows(result):
     """Önem derecesi dağılımı (yüksekten düşüğe, sıfır olanlar atılır)."""
@@ -84,7 +107,28 @@ def _context(result, title: str) -> dict:
         "critical": counts.get("critical", 0),
         "high": counts.get("high", 0),
         "files_scanned": result.files_scanned,
+        "files_cached": result.files_cached,
         "files_affected": len({f.source for f in findings}),
+        # Tekil sır sayısı bulgu sayısından çok daha anlamlı: aynı
+        # anahtarın 40 kopyası tek bir iptalle kapanır.
+        "unique_total": result.unique_count,
+        "shared_groups": [
+            {
+                "type": group.type,
+                "title": group.title or group.type,
+                "severity": group.severity,
+                "severity_label": group.severity_enum.label_tr,
+                "masked": group.content_masked,
+                "count": group.count,
+                "file_count": group.file_count,
+                "files": [
+                    _relative(name, result.target)
+                    for name in group.files[:MAX_GROUP_FILES]
+                ],
+                "more_files": max(0, group.file_count - MAX_GROUP_FILES),
+            }
+            for group in result.shared_secrets()[:MAX_GROUP_ROWS]
+        ],
         "duration": f"{result.duration:.2f}",
         "target": result.target,
         "cancelled": result.cancelled,
@@ -279,6 +323,20 @@ button.theme:hover { color: var(--text-primary); }
 .panel h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
 .panel p.hint { margin: 0 0 16px; font-size: 12px; color: var(--text-muted); }
 
+/* --- Yayılmış sırlar: tek işle kapanan kopya kümeleri ---
+   Tablo değil liste: 390 px'te bir tablonun değer sütunu kırpılıyordu,
+   akan bir liste her genişlikte kendini toplar. */
+.panel.spread { margin-bottom: 24px; }
+.spread-list { list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 14px; }
+.spread-list li { border-top: 1px solid var(--border); padding-top: 14px; }
+.spread-list li:first-child { border-top: 0; padding-top: 0; }
+.spread-head { display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 10px; margin-bottom: 6px; }
+.spread-head .type { font-size: 13px; font-weight: 600; }
+.spread-head .n { margin-left: auto; font-size: 12px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; }
+
 /* --- Önem derecesi: yığılmış tek çubuk, aralarda 2px yüzey boşluğu --- */
 .stack { display: flex; gap: 2px; height: 10px; margin-bottom: 14px; }
 .stack div { border-radius: 2px; min-width: 3px; }
@@ -370,7 +428,8 @@ details.errors li { word-break: break-all; }
     <h1>{{ title }}</h1>
     <p class="meta">
       {{ generated_at }} · hedef <code>{{ target }}</code> ·
-      {{ duration }} sn · {{ files_scanned }} dosya tarandı
+      {{ duration }} sn · {{ files_scanned }} dosya tarandı{% if files_cached %}
+      ({{ files_cached }}'i önbellekten){% endif %}
     </p>
   </div>
   <button class="theme" type="button" id="themeToggle"
@@ -390,6 +449,10 @@ details.errors li { word-break: break-all; }
     <h3>Toplam Bulgu</h3>
     <div class="value">{{ total }}</div>
   </div>
+  <div class="tile{% if total == 0 %} ok{% endif %}">
+    <h3>Tekil Sır</h3>
+    <div class="value">{{ unique_total }}</div>
+  </div>
   <div class="tile">
     <h3>Kritik + Yüksek</h3>
     <div class="value">{{ critical + high }}</div>
@@ -399,6 +462,35 @@ details.errors li { word-break: break-all; }
     <div class="value">{{ files_affected }}</div>
   </div>
 </section>
+
+{% if shared_groups %}
+<section class="panel spread" aria-labelledby="spread-h">
+  <h2 id="spread-h">Birden fazla dosyaya kopyalanmış sırlar</h2>
+  <p class="hint">
+    Aynı değerin her kopyası ayrı bir bulgu olarak sayılır, ama hepsi
+    <strong>tek bir işle</strong> kapanır: anahtarı iptal et ya da veriyi
+    kaldır. Eşleştirme parmak izi (HMAC-SHA256) üzerinden yapılır; değerin
+    kendisi hiçbir yerde açılmaz. Yollar hedefe görelidir; tam liste JSON
+    raporunda.
+  </p>
+  <ul class="spread-list">
+    {% for group in shared_groups %}
+    <li>
+      <div class="spread-head">
+        <span class="sev sev-{{ group.severity }}">
+          <span class="dot"></span>{{ group.severity_label }}
+        </span>
+        <strong class="type">{{ group.type }}</strong>
+        <span class="n">{{ group.file_count }} dosya · {{ group.count }} bulgu</span>
+      </div>
+      <code class="masked">{{ group.masked }}</code>
+      <span class="snippet">{{ group.files|join(' · ') }}{% if group.more_files %}
+        … +{{ group.more_files }} dosya{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 
 {% if findings %}
 <section class="panels">
