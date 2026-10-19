@@ -119,7 +119,13 @@ class Matcher:
             if len(line) > self.config.max_line_length:
                 line = line[: self.config.max_line_length]
 
-            for candidate in self._resolve_overlaps(self._candidates(line)):
+            accepted = self._resolve_overlaps(self._candidates(line))
+            # Alıntıda satırdaki her hassas değer maskelenir; bastırılanlar
+            # da dâhil, çünkü bir desene uyan değeri açık yazmanın hiçbir
+            # faydası yok.
+            sensitive_spans = [(item.start, item.end) for item in accepted]
+
+            for candidate in accepted:
                 if self.allowlist.inline_suppressed(line, candidate.rule):
                     continue
                 if self.allowlist.allows_rule(candidate.rule):
@@ -150,7 +156,12 @@ class Matcher:
                         content_masked=mask_data(print_value),
                         fingerprint=fp,
                         snippet=(
-                            redact_snippet(line, candidate.start, candidate.end)
+                            redact_snippet(
+                                line,
+                                candidate.start,
+                                candidate.end,
+                                spans=sensitive_spans,
+                            )
                             if self.config.snippet_enabled
                             else ""
                         ),

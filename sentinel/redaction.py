@@ -47,18 +47,47 @@ def fingerprint(value: str, salt: str = "", length: int = 16) -> str:
     return digest[:length]
 
 
-def redact_snippet(line: str, start: int, end: int, width: int = SNIPPET_WIDTH) -> str:
+def redact_snippet(
+    line: str,
+    start: int,
+    end: int,
+    width: int = SNIPPET_WIDTH,
+    spans: list | tuple | None = None,
+) -> str:
     """Bulgunun etrafındaki bağlamı, bulgunun kendisi maskelenmiş olarak verir.
 
     Analist "bu neden tetiklendi?" sorusunu rapora bakarak cevaplayabilsin
-    diye bağlam şart; ama bağlamın ortasındaki değer açıkta kalmamalı.
+    diye bağlam şart; ama bağlamdaki **hiçbir** hassas değer açıkta
+    kalmamalı. `spans` verildiğinde o aralıkların hepsi maskelenir.
     """
     if not line:
         return ""
-    value = line[start:end]
-    masked = mask_data(value)
-    before = line[max(0, start - width) : start]
-    after = line[end : end + width]
+
+    # Satırdaki TÜM hassas değerleri maskele, yalnızca odaktakini değil.
+    # Aksi hâlde "kart,IBAN,TC" gibi bir CSV satırında kart bulgusunun
+    # alıntısı IBAN'ı, IBAN bulgusunun alıntısı kartı açıkta bırakır —
+    # rapor, koruduğunu iddia ettiği verinin neredeyse tamamını sızdırır.
+    targets = list(spans) if spans else []
+    if (start, end) not in targets:
+        targets.append((start, end))
+
+    # `mask_data` uzunluğu korur, bu yüzden yerinde değiştirmek kaydırma
+    # yaratmaz; yine de savunmacı davranıp uzunluğu doğruluyoruz.
+    chars = list(line)
+    for span_start, span_end in targets:
+        span_start = max(0, span_start)
+        span_end = min(len(line), span_end)
+        if span_start >= span_end:
+            continue
+        masked = mask_data(line[span_start:span_end])
+        if len(masked) != span_end - span_start:
+            masked = "*" * (span_end - span_start)
+        chars[span_start:span_end] = masked
+
+    redacted = "".join(chars)
+    before = redacted[max(0, start - width) : start]
+    focus = redacted[start:end]
+    after = redacted[end : end + width]
     prefix = "…" if start - width > 0 else ""
     suffix = "…" if end + width < len(line) else ""
-    return f"{prefix}{before}{masked}{after}{suffix}".strip()
+    return f"{prefix}{before}{focus}{after}{suffix}".strip()
