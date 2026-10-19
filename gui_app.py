@@ -1,361 +1,756 @@
-import sys
+"""Sentinel masaüstü arayüzü (CustomTkinter).
+
+Çekirdek mantık `sentinel` paketindedir; bu dosya yalnızca sunum
+katmanıdır. v3.0'a göre değişenler:
+
+* tarama **iş parçacığı havuzunda** çalışır (GUI'de `fork` riskinden
+  kaçınmak için `executor="thread"`), ilerleme çubuğu gerçek yüzdeyi
+  gösterir — belirsiz animasyon değil,
+* bulgular önem derecesine göre renklenir ve filtrelenebilir tabloda
+  listelenir; eskiden sadece log akışı vardı,
+* rapor yazımı ve dosya açma **çapraz platform**dur (`os.startfile`
+  yalnızca Windows'ta vardı),
+* matplotlib zorunlu değil: yoksa grafik yerine metin dağılımı gösterilir,
+  uygulama açılmaya devam eder.
+"""
+
+from __future__ import annotations
+
 import os
+import subprocess
+import sys
 import threading
 import webbrowser
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import customtkinter as ctk
 
-# --- GRAFİK KÜTÜPHANESİ ---
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+# PyInstaller ile paketlendiğinde kaynaklar _MEIPASS altında olur.
+_BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+if _BASE not in sys.path:
+    sys.path.insert(0, _BASE)
 
-# --- AYARLAR VE TEMA ---
+try:
+    from tkinter import filedialog, messagebox
+
+    import customtkinter as ctk
+except ImportError:  # pragma: no cover - GUI bağımlılıkları eksik
+    sys.stderr.write(
+        "Masaüstü arayüzü için customtkinter gerekli:\n"
+        "    pip install 'sentinel-dlp[gui]'\n"
+        "Komut satırı sürümü bağımsız çalışır:  sentinel scan <klasör>\n"
+    )
+    raise SystemExit(1) from None
+
+from sentinel import __version__
+from sentinel.config import ScanConfig
+from sentinel.engine import Scanner
+from sentinel.quarantine import QuarantineManager
+from sentinel.reporting import write_reports
+from sentinel.severity import Severity
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
 
-# --- PATH AYARLARI ---
-def get_base_path():
-    if getattr(sys, 'frozen', False): return sys._MEIPASS
-    return os.path.dirname(os.path.abspath(__file__))
+#: Önem derecesi renkleri — durum (status) paleti, kategorik seri değil.
+SEVERITY_COLORS = {
+    Severity.CRITICAL: "#d03b3b",
+    Severity.HIGH: "#ec835a",
+    Severity.MEDIUM: "#fab219",
+    Severity.LOW: "#0ca30c",
+    Severity.INFO: "#8f8e85",
+}
 
-base_path = get_base_path()
-src_path = os.path.join(base_path, 'src')
-if src_path not in sys.path: sys.path.insert(0, src_path)
+#: Tabloya basılacak en fazla satır — Tk binlerce widget'ta tıkanır.
+MAX_ROWS = 300
 
-try:
-    from scanner import Scanner
-    from reporter import generate_html_report
-    from quarantine import QuarantineManager
-    from pdf_gen import create_pdf_report
-except ImportError as e:
-    messagebox.showerror("Kritik Hata", f"Modüller eksik: {e}")
-    sys.exit(1)
+
+def open_path(path: str):
+    """Dosyayı/dizini işletim sisteminin varsayılan uygulamasında açar."""
+    path = os.path.abspath(path)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except (OSError, AttributeError):
+        webbrowser.open(f"file://{path}")
+
 
 class SentinelPro(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # PENCERE YAPILANDIRMASI
-        self.title("SENTINEL | Endpoint Security Dashboard")
-        self.geometry("1200x800")
-        self.minsize(1000, 700)
-        
-        # Grid Layout (Sidebar | Main)
+        self.title(f"SENTINEL {__version__} | Endpoint Security Dashboard")
+        self.geometry("1280x840")
+        self.minsize(1060, 720)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.qm = QuarantineManager()
-        self.last_results = []
-        self.current_scanner = None # Aktif tarayıcıyı tutmak için
-        
-        self.create_sidebar()
-        self.create_main_area()
+        self.config_obj = ScanConfig.discover() or ScanConfig()
+        self.config_obj = self.config_obj.with_env()
+        self.qm = QuarantineManager(self.config_obj.quarantine_dir)
 
-    def create_sidebar(self):
-        """Sol Menü Paneli"""
-        self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(4, weight=1)
+        self.result = None
+        self.current_scanner: Scanner | None = None
+        self._rows: list = []
 
-        # Logo
-        self.lbl_logo = ctk.CTkLabel(self.sidebar, text="🛡️ SENTINEL", 
-                                     font=ctk.CTkFont(size=26, weight="bold"))
-        self.lbl_logo.grid(row=0, column=0, padx=20, pady=(30, 10))
-        
-        self.lbl_sub = ctk.CTkLabel(self.sidebar, text="DLP & Threat Hunter", 
-                                    text_color="gray", font=ctk.CTkFont(size=12))
-        self.lbl_sub.grid(row=1, column=0, padx=20, pady=(0, 30))
-
-        # Butonlar
-        self.btn_nav_scan = ctk.CTkButton(self.sidebar, text="🔍  Tarama Merkezi", height=45, corner_radius=8,
-                                          fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
-                                          anchor="w", font=ctk.CTkFont(weight="bold"), 
-                                          command=lambda: self.show_frame("scan"))
-        self.btn_nav_scan.grid(row=2, column=0, padx=15, pady=5, sticky="ew")
-
-        self.btn_nav_quarantine = ctk.CTkButton(self.sidebar, text="☣️  Karantina Kasası", height=45, corner_radius=8,
-                                                fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
-                                                anchor="w", font=ctk.CTkFont(weight="bold"),
-                                                command=lambda: self.show_frame("quarantine"))
-        self.btn_nav_quarantine.grid(row=3, column=0, padx=15, pady=5, sticky="ew")
-
-        # Footer
-        self.lbl_status = ctk.CTkLabel(self.sidebar, text="System: ONLINE", text_color="#00e676", font=ctk.CTkFont(size=11, weight="bold"))
-        self.lbl_status.grid(row=5, column=0, padx=20, pady=20)
-
-    def create_main_area(self):
-        """Sağ İçerik Alanı"""
-        # --- 1. TARAMA SAYFASI ---
-        self.frame_scan = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        
-        # Üst Panel (Input ve Ayarlar)
-        self.top_panel = ctk.CTkFrame(self.frame_scan, corner_radius=15, fg_color=("#2b2b2b"))
-        self.top_panel.pack(fill="x", padx=30, pady=20)
-        
-        ctk.CTkLabel(self.top_panel, text="YENİ TARAMA GÖREVİ", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", padx=20, pady=(15, 5))
-        
-        # Dosya Yolu
-        self.path_frame = ctk.CTkFrame(self.top_panel, fg_color="transparent")
-        self.path_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        self.entry_path = ctk.CTkEntry(self.path_frame, placeholder_text="C:\\Users\\Data...", height=40)
-        self.entry_path.pack(side="left", fill="x", expand=True, padx=(10, 10))
-        
-        self.btn_browse = ctk.CTkButton(self.path_frame, text="📂 Seç", width=80, height=40, command=self.browse_folder)
-        self.btn_browse.pack(side="left", padx=(0, 10))
-
-        # Switchler
-        self.switch_frame = ctk.CTkFrame(self.top_panel, fg_color="transparent")
-        self.switch_frame.pack(fill="x", padx=20, pady=10)
-        
-        self.switch_ocr = ctk.CTkSwitch(self.switch_frame, text="OCR (Görsel Analiz)", progress_color="#f39c12")
-        self.switch_ocr.pack(side="left", padx=10)
-        
-        self.switch_quarantine = ctk.CTkSwitch(self.switch_frame, text="Aktif Karantina", progress_color="#e74c3c")
-        self.switch_quarantine.pack(side="left", padx=20)
-
-        # Başlat / Durdur Butonu (Değişken Buton)
-        self.btn_start = ctk.CTkButton(self.frame_scan, text="🚀 ANALİZİ BAŞLAT", height=50, 
-                                       font=ctk.CTkFont(size=16, weight="bold"), fg_color="#00695c", hover_color="#004d40",
-                                       command=self.start_scan_process)
-        self.btn_start.pack(fill="x", padx=30, pady=(0, 10))
-
-        # İlerleme Çubuğu
-        self.progress = ctk.CTkProgressBar(self.frame_scan, height=10)
-        self.progress.pack(fill="x", padx=30, pady=(10, 5))
-        self.progress.set(0)
-
-        # --- ALT PANEL (Loglar ve Grafik) ---
-        self.bottom_split = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
-        self.bottom_split.pack(fill="both", expand=True, padx=30, pady=20)
-        
-        # Sol: Log
-        self.log_container = ctk.CTkFrame(self.bottom_split, fg_color="transparent")
-        self.log_container.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
-        ctk.CTkLabel(self.log_container, text="Canlı Terminal", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
-        self.log_area = ctk.CTkTextbox(self.log_container, font=ctk.CTkFont(family="Consolas", size=12), 
-                                       fg_color="#1a1a1a", text_color="#00ff41")
-        self.log_area.pack(fill="both", expand=True, pady=(5, 0))
-        self.log_area.insert("0.0", "> Sentinel Security Core loaded...\n")
-        self.log_area.configure(state="disabled")
-
-        # Sağ: Grafik Alanı
-        self.chart_container = ctk.CTkFrame(self.bottom_split, width=300, fg_color="#2b2b2b", corner_radius=15)
-        self.chart_container.pack(side="right", fill="y", padx=(10, 0))
-        self.chart_container.pack_propagate(False) 
-        
-        ctk.CTkLabel(self.chart_container, text="Risk Analizi", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=10)
-        self.chart_canvas_area = ctk.CTkFrame(self.chart_container, fg_color="transparent")
-        self.chart_canvas_area.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Rapor Butonları
-        self.report_frame = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
-        self.report_frame.pack(fill="x", padx=30, pady=(0, 20))
-        
-        self.btn_html = ctk.CTkButton(self.report_frame, text="🌐 HTML Rapor", state="disabled", fg_color="#2980b9", command=self.open_html_report)
-        self.btn_html.pack(side="left", expand=True, fill="x", padx=5)
-        
-        self.btn_pdf = ctk.CTkButton(self.report_frame, text="📄 PDF Rapor", state="disabled", fg_color="#c0392b", command=self.save_pdf_report)
-        self.btn_pdf.pack(side="left", expand=True, fill="x", padx=5)
-
-        # --- 2. KARANTİNA SAYFASI ---
-        self.frame_quarantine = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        
-        ctk.CTkLabel(self.frame_quarantine, text="KARANTİNA KASASI", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=30)
-        
-        self.btn_refresh = ctk.CTkButton(self.frame_quarantine, text="🔄 Listeyi Yenile", command=self.refresh_quarantine_list)
-        self.btn_refresh.pack(pady=10)
-        
-        self.q_list_frame = ctk.CTkScrollableFrame(self.frame_quarantine, label_text="Şifreli Dosyalar")
-        self.q_list_frame.pack(fill="both", expand=True, padx=50, pady=20)
-
-        # Başlangıç
+        self._build_sidebar()
+        self._build_scan_page()
+        self._build_vault_page()
         self.show_frame("scan")
 
-    def show_frame(self, page_name):
-        if page_name == "scan":
-            self.frame_quarantine.grid_forget()
+    # ------------------------------------------------------------------
+    def _build_sidebar(self):
+        self.sidebar = ctk.CTkFrame(self, width=230, corner_radius=0)
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        self.sidebar.grid_rowconfigure(5, weight=1)
+
+        ctk.CTkLabel(
+            self.sidebar, text="🛡️ SENTINEL", font=ctk.CTkFont(size=26, weight="bold")
+        ).grid(row=0, column=0, padx=20, pady=(30, 4))
+        ctk.CTkLabel(
+            self.sidebar,
+            text=f"DLP & Threat Hunter · v{__version__}",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+        ).grid(row=1, column=0, padx=20, pady=(0, 28))
+
+        self.btn_nav_scan = self._nav_button("🔍  Tarama Merkezi", "scan", 2)
+        self.btn_nav_vault = self._nav_button("☣️  Karantina Kasası", "quarantine", 3)
+
+        self.lbl_status = ctk.CTkLabel(
+            self.sidebar,
+            text="System: ONLINE",
+            text_color="#0ca30c",
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.lbl_status.grid(row=6, column=0, padx=20, pady=20)
+
+    def _nav_button(self, text: str, page: str, row: int):
+        button = ctk.CTkButton(
+            self.sidebar,
+            text=text,
+            height=45,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=("gray10", "gray90"),
+            hover_color=("gray70", "gray30"),
+            anchor="w",
+            font=ctk.CTkFont(weight="bold"),
+            command=lambda: self.show_frame(page),
+        )
+        button.grid(row=row, column=0, padx=15, pady=5, sticky="ew")
+        return button
+
+    # ------------------------------------------------------------------
+    def _build_scan_page(self):
+        self.frame_scan = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+
+        top = ctk.CTkFrame(self.frame_scan, corner_radius=15)
+        top.pack(fill="x", padx=26, pady=(20, 14))
+
+        ctk.CTkLabel(
+            top, text="YENİ TARAMA GÖREVİ", font=ctk.CTkFont(weight="bold", size=14)
+        ).pack(anchor="w", padx=20, pady=(15, 6))
+
+        path_row = ctk.CTkFrame(top, fg_color="transparent")
+        path_row.pack(fill="x", padx=10, pady=(0, 10))
+        self.entry_path = ctk.CTkEntry(
+            path_row, placeholder_text="Taranacak klasörü seçin…", height=40
+        )
+        self.entry_path.pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.entry_path.insert(0, os.path.abspath(self.config_obj.target))
+        ctk.CTkButton(
+            path_row, text="📂 Seç", width=86, height=40, command=self.browse_folder
+        ).pack(side="left", padx=(0, 10))
+
+        switches = ctk.CTkFrame(top, fg_color="transparent")
+        switches.pack(fill="x", padx=20, pady=(0, 14))
+
+        self.switch_ocr = ctk.CTkSwitch(
+            switches, text="OCR (görsel analiz)", progress_color="#eb6834"
+        )
+        self.switch_ocr.pack(side="left", padx=(10, 22))
+
+        self.switch_archive = ctk.CTkSwitch(
+            switches, text="Arşiv içine gir (ZIP)", progress_color="#2a78d6"
+        )
+        self.switch_archive.select()
+        self.switch_archive.pack(side="left", padx=(0, 22))
+
+        self.switch_quarantine = ctk.CTkSwitch(
+            switches, text="Aktif karantina", progress_color="#d03b3b"
+        )
+        self.switch_quarantine.pack(side="left", padx=(0, 22))
+
+        ctk.CTkLabel(switches, text="Alt eşik:", font=ctk.CTkFont(size=12)).pack(
+            side="left", padx=(10, 6)
+        )
+        self.option_severity = ctk.CTkOptionMenu(
+            switches,
+            width=120,
+            values=[severity.label_tr for severity in Severity],
+        )
+        self.option_severity.set(Severity.LOW.label_tr)
+        self.option_severity.pack(side="left")
+
+        self.btn_start = ctk.CTkButton(
+            self.frame_scan,
+            text="🚀 ANALİZİ BAŞLAT",
+            height=50,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            fg_color="#00695c",
+            hover_color="#004d40",
+            command=self.start_scan,
+        )
+        self.btn_start.pack(fill="x", padx=26, pady=(0, 8))
+
+        self.progress = ctk.CTkProgressBar(self.frame_scan, height=8)
+        self.progress.pack(fill="x", padx=26, pady=(6, 2))
+        self.progress.set(0)
+
+        self.lbl_progress = ctk.CTkLabel(
+            self.frame_scan, text="", text_color="gray", font=ctk.CTkFont(size=11)
+        )
+        self.lbl_progress.pack(anchor="w", padx=26, pady=(0, 10))
+
+        # Özet şeridi
+        self.summary_bar = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
+        self.summary_bar.pack(fill="x", padx=26, pady=(0, 10))
+        self.summary_labels = {}
+        for key, title in (
+            ("risk", "RİSK SKORU"),
+            ("total", "BULGU"),
+            ("files", "DOSYA"),
+            ("duration", "SÜRE"),
+        ):
+            tile = ctk.CTkFrame(self.summary_bar, corner_radius=10)
+            tile.pack(side="left", expand=True, fill="x", padx=4)
+            ctk.CTkLabel(
+                tile, text=title, text_color="gray", font=ctk.CTkFont(size=10, weight="bold")
+            ).pack(pady=(10, 0))
+            value = ctk.CTkLabel(tile, text="—", font=ctk.CTkFont(size=22, weight="bold"))
+            value.pack(pady=(0, 10))
+            self.summary_labels[key] = value
+
+        # Alt bölüm: bulgular + log/grafik
+        split = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
+        split.pack(fill="both", expand=True, padx=26, pady=(4, 10))
+
+        left = ctk.CTkFrame(split, fg_color="transparent")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 10))
+
+        filter_row = ctk.CTkFrame(left, fg_color="transparent")
+        filter_row.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(
+            filter_row, text="Bulgular", font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(side="left")
+        self.entry_filter = ctk.CTkEntry(
+            filter_row, placeholder_text="filtrele…", width=200, height=28
+        )
+        self.entry_filter.pack(side="right")
+        self.entry_filter.bind("<KeyRelease>", lambda _event: self.refresh_findings())
+
+        self.findings_frame = ctk.CTkScrollableFrame(left, fg_color="#1a1a19")
+        self.findings_frame.pack(fill="both", expand=True)
+
+        right = ctk.CTkFrame(split, width=320, corner_radius=14)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
+
+        ctk.CTkLabel(
+            right, text="Risk Dağılımı", font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(pady=(12, 4))
+        self.chart_area = ctk.CTkFrame(right, fg_color="transparent")
+        self.chart_area.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+        ctk.CTkLabel(
+            right, text="Canlı Terminal", font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(pady=(4, 4))
+        self.log_area = ctk.CTkTextbox(
+            right,
+            height=170,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#121211",
+            text_color="#3987e5",
+        )
+        self.log_area.pack(fill="x", expand=False, padx=10, pady=(0, 12))
+        self.log_area.insert("0.0", "> Sentinel Security Core loaded…\n")
+        self.log_area.configure(state="disabled")
+
+        reports = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
+        reports.pack(fill="x", padx=26, pady=(0, 18))
+        self.btn_html = ctk.CTkButton(
+            reports, text="🌐 HTML", state="disabled", fg_color="#2a78d6",
+            command=lambda: self.save_report("html"),
+        )
+        self.btn_pdf = ctk.CTkButton(
+            reports, text="📄 PDF", state="disabled", fg_color="#d03b3b",
+            command=lambda: self.save_report("pdf"),
+        )
+        self.btn_csv = ctk.CTkButton(
+            reports, text="📊 CSV", state="disabled", fg_color="#1baf7a",
+            command=lambda: self.save_report("csv"),
+        )
+        self.btn_sarif = ctk.CTkButton(
+            reports, text="🧩 SARIF", state="disabled", fg_color="#6250d6",
+            command=lambda: self.save_report("sarif"),
+        )
+        for button in (self.btn_html, self.btn_pdf, self.btn_csv, self.btn_sarif):
+            button.pack(side="left", expand=True, fill="x", padx=4)
+
+    def _build_vault_page(self):
+        self.frame_vault = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+
+        ctk.CTkLabel(
+            self.frame_vault,
+            text="KARANTİNA KASASI",
+            font=ctk.CTkFont(size=24, weight="bold"),
+        ).pack(pady=(30, 6))
+        ctk.CTkLabel(
+            self.frame_vault,
+            text="Dosyalar AES-256-GCM ile şifrelenmiştir. "
+            "Kurtarma, bütünlük doğrulandıktan sonra yapılır.",
+            text_color="gray",
+            font=ctk.CTkFont(size=12),
+        ).pack(pady=(0, 16))
+
+        actions = ctk.CTkFrame(self.frame_vault, fg_color="transparent")
+        actions.pack(pady=(0, 10))
+        ctk.CTkButton(actions, text="🔄 Yenile", width=130,
+                      command=self.refresh_vault).pack(side="left", padx=6)
+        ctk.CTkButton(actions, text="🔎 Bütünlük Denetimi", width=180,
+                      fg_color="#2a78d6", command=self.verify_vault).pack(
+            side="left", padx=6
+        )
+
+        self.vault_list = ctk.CTkScrollableFrame(
+            self.frame_vault, label_text="Şifreli Dosyalar"
+        )
+        self.vault_list.pack(fill="both", expand=True, padx=44, pady=(10, 26))
+
+    # ------------------------------------------------------------------
+    def show_frame(self, page: str):
+        if page == "scan":
+            self.frame_vault.grid_forget()
             self.frame_scan.grid(row=0, column=1, sticky="nsew")
             self.btn_nav_scan.configure(fg_color=("gray75", "gray25"))
-            self.btn_nav_quarantine.configure(fg_color="transparent")
-        elif page_name == "quarantine":
+            self.btn_nav_vault.configure(fg_color="transparent")
+        else:
             self.frame_scan.grid_forget()
-            self.frame_quarantine.grid(row=0, column=1, sticky="nsew")
+            self.frame_vault.grid(row=0, column=1, sticky="nsew")
             self.btn_nav_scan.configure(fg_color="transparent")
-            self.btn_nav_quarantine.configure(fg_color=("gray75", "gray25"))
-            self.refresh_quarantine_list()
+            self.btn_nav_vault.configure(fg_color=("gray75", "gray25"))
+            self.refresh_vault()
 
     def browse_folder(self):
         folder = filedialog.askdirectory()
         if folder:
-            self.entry_path.delete(0, tk.END)
+            self.entry_path.delete(0, "end")
             self.entry_path.insert(0, folder)
 
-    def log(self, msg):
+    def log(self, message: str):
         self.log_area.configure(state="normal")
-        self.log_area.insert("end", f"> {msg}\n")
+        self.log_area.insert("end", f"> {message}\n")
         self.log_area.see("end")
         self.log_area.configure(state="disabled")
 
-    # --- TARAMA YÖNETİMİ (BAŞLAT / DURDUR) ---
-    def start_scan_process(self):
-        target = self.entry_path.get()
-        if not target:
-            messagebox.showwarning("Uyarı", "Lütfen bir klasör seçin!")
+    # ------------------------------------------------------------------
+    def _selected_severity(self) -> str:
+        label = self.option_severity.get()
+        for severity in Severity:
+            if severity.label_tr == label:
+                return severity.value
+        return Severity.LOW.value
+
+    def start_scan(self):
+        target = self.entry_path.get().strip()
+        if not target or not os.path.exists(target):
+            messagebox.showwarning("Uyarı", "Geçerli bir klasör ya da dosya seçin.")
             return
-        
-        # Butonu "DURDUR" moduna çevir
-        self.btn_start.configure(text="🛑 DURDUR", fg_color="#c0392b", hover_color="#e74c3c", command=self.stop_scan_process)
-        
-        # UI Hazırlığı
-        self.btn_html.configure(state="disabled")
-        self.btn_pdf.configure(state="disabled")
-        self.progress.start()
-        
-        # Log ve Grafik Temizliği
+
+        if self.switch_quarantine.get() and not messagebox.askyesno(
+            "Karantina onayı",
+            "Aktif karantina açık.\n\n"
+            f"'{self._selected_severity()}' ve üstü bulgu içeren dosyalar "
+            "şifrelenerek kasaya taşınacak ve ORİJİNALLERİ SİLİNECEK.\n\n"
+            "Devam edilsin mi?",
+        ):
+            return
+
+        self.btn_start.configure(
+            text="🛑 DURDUR",
+            fg_color="#d03b3b",
+            hover_color="#e66767",
+            command=self.stop_scan,
+        )
+        for button in (self.btn_html, self.btn_pdf, self.btn_csv, self.btn_sarif):
+            button.configure(state="disabled")
+
+        self.progress.set(0)
+        self.lbl_progress.configure(text="Dosyalar sıralanıyor…")
         self.log_area.configure(state="normal")
         self.log_area.delete("1.0", "end")
         self.log_area.configure(state="disabled")
-        
-        # Eski grafiği temizle
-        for widget in self.chart_canvas_area.winfo_children():
+        for widget in self.findings_frame.winfo_children():
             widget.destroy()
+        for widget in self.chart_area.winfo_children():
+            widget.destroy()
+        for label in self.summary_labels.values():
+            label.configure(text="—")
 
-        self.log(f"Hedef analiz ediliyor: {target}")
-        
-        # Thread başlat
-        t = threading.Thread(target=self.run_scan_thread, args=(target,))
-        t.daemon = True
-        t.start()
+        self.log(f"Hedef: {target}")
 
-    def stop_scan_process(self):
-        """Kullanıcı Durdur'a bastığında çalışır"""
-        if self.current_scanner:
-            self.log("⚠️ DURDURMA SİNYALİ GÖNDERİLDİ...")
+        thread = threading.Thread(target=self._run_scan, args=(target,), daemon=True)
+        thread.start()
+
+    def stop_scan(self):
+        if self.current_scanner is not None:
+            self.log("⚠️ Durdurma sinyali gönderildi…")
             self.current_scanner.stop_scan()
-            self.btn_start.configure(state="disabled", text="DURDURULUYOR...")
+            self.btn_start.configure(state="disabled", text="DURDURULUYOR…")
 
-    def run_scan_thread(self, target):
+    def _run_scan(self, target: str):
         try:
-            ocr_val = bool(self.switch_ocr.get())
-            quar_val = bool(self.switch_quarantine.get())
+            config = self.config_obj.replace(
+                target=target,
+                ocr=bool(self.switch_ocr.get()),
+                archive_enabled=bool(self.switch_archive.get()),
+                quarantine=bool(self.switch_quarantine.get()),
+                quarantine_min_severity=self._selected_severity(),
+                min_severity=self._selected_severity(),
+                # GUI içinde süreç çatallamak Tk ile sorun çıkarır.
+                executor="thread",
+            )
+            self.current_scanner = Scanner(
+                target,
+                config=config,
+                log=lambda message: self.after(0, self.log, message),
+            )
+            result = self.current_scanner.scan(progress=self._on_progress)
+            self.after(0, self._finish, result, None)
+        except Exception as exc:  # pragma: no cover - GUI hata yolu
+            self.after(0, self._finish, None, exc)
 
-            # Scanner nesnesini oluştur ve referansını sakla (Durdurabilmek için)
-            self.current_scanner = Scanner(target, use_ocr=ocr_val, quarantine_mode=quar_val)
-            
-            # Taramayı başlat
-            self.last_results = self.current_scanner.start_scan_parallel()
-            
-            if self.last_results:
-                generate_html_report(self.last_results, "dashboard.html")
-                self.after(0, lambda: self.finish_scan(True, False))
-            else:
-                self.after(0, lambda: self.finish_scan(False, False))
-                
-        except Exception as e:
-            self.after(0, lambda: self.log(f"KRİTİK HATA: {e}"))
-            self.after(0, lambda: self.finish_scan(False, True))
+    def _on_progress(self, done: int, total: int, path: str):
+        fraction = (done / total) if total else 0
+        self.after(0, self.progress.set, fraction)
+        self.after(
+            0,
+            self.lbl_progress.configure,
+            {"text": f"{done}/{total} dosya — {os.path.basename(path)}"},
+        )
 
-    def finish_scan(self, found_threats, is_error):
-        self.progress.stop()
-        self.progress.set(1 if found_threats else 0)
-        
-        # Butonu tekrar "BAŞLAT" moduna çevir
-        self.btn_start.configure(state="normal", text="🚀 ANALİZİ BAŞLAT", fg_color="#00695c", hover_color="#004d40", command=self.start_scan_process)
-        
-        self.current_scanner = None # Referansı temizle
+    def _finish(self, result, error):
+        self.current_scanner = None
+        self.btn_start.configure(
+            state="normal",
+            text="🚀 ANALİZİ BAŞLAT",
+            fg_color="#00695c",
+            hover_color="#004d40",
+            command=self.start_scan,
+        )
 
-        if is_error:
-            self.log("❌ Tarama hata ile sonlandı.")
+        if error is not None:
+            self.lbl_progress.configure(text="")
+            self.log(f"❌ KRİTİK HATA: {error}")
+            messagebox.showerror("Hata", f"Tarama başarısız oldu:\n{error}")
             return
 
-        if found_threats:
-            count = len(self.last_results)
-            self.log(f"⚠️ İŞLEM TAMAMLANDI: {count} tehdit bulundu.")
-            self.btn_html.configure(state="normal")
-            self.btn_pdf.configure(state="normal")
-            messagebox.showwarning("Alarm", f"{count} adet riskli veri tespit edildi.")
-            self.create_chart()
-        else:
-            self.log("✅ İŞLEM TAMAMLANDI: Sistem temiz.")
+        self.result = result
+        self.progress.set(1)
+        self.lbl_progress.configure(
+            text=f"{result.files_scanned} dosya tarandı · "
+            f"{result.files_skipped} atlandı · {len(result.errors)} hata"
+        )
+
+        self.summary_labels["risk"].configure(text=str(result.risk_score))
+        self.summary_labels["total"].configure(text=str(len(result.findings)))
+        self.summary_labels["files"].configure(text=str(result.files_scanned))
+        self.summary_labels["duration"].configure(text=f"{result.duration:.1f}s")
+
+        self.refresh_findings()
+        self._draw_chart()
+
+        if not result.findings:
+            self.log("✅ Sistem temiz — eşik üstü hassas veri bulunamadı.")
             messagebox.showinfo("Temiz", "Tehdit bulunamadı.")
+            return
 
-    def create_chart(self):
-        # Verileri Say
-        counts = {}
-        for item in self.last_results:
-            typ = item['type']
-            counts[typ] = counts.get(typ, 0) + 1
-            
-        labels = list(counts.keys())
-        sizes = list(counts.values())
-        
-        # Matplotlib ile Pasta Grafiği
-        fig, ax = plt.subplots(figsize=(4, 4), dpi=100)
-        fig.patch.set_facecolor('#2b2b2b')
-        ax.set_facecolor('#2b2b2b')
-        
-        colors = ['#e74c3c', '#3498db', '#f1c40f', '#9b59b6', '#2ecc71']
-        
-        wedges, texts, autotexts = ax.pie(sizes, labels=labels, autopct='%1.1f%%', 
-                                          startangle=90, colors=colors[:len(labels)],
-                                          textprops={'color':"white", 'fontsize': 9})
-        
-        ax.axis('equal')
-        plt.title("Risk Dağılımı", color="white", fontsize=11, pad=10)
-        plt.tight_layout()
+        for button in (self.btn_html, self.btn_pdf, self.btn_csv, self.btn_sarif):
+            button.configure(state="normal")
 
-        canvas = FigureCanvasTkAgg(fig, master=self.chart_canvas_area)
+        counts = result.counts_by_severity()
+        self.log(
+            f"⚠️ {len(result.findings)} bulgu — kritik: {counts.get('critical', 0)}, "
+            f"yüksek: {counts.get('high', 0)}"
+        )
+        if result.quarantined:
+            self.log(f"☣️ {len(result.quarantined)} dosya karantinaya alındı.")
+
+        messagebox.showwarning(
+            "Alarm",
+            f"{len(result.findings)} riskli veri tespit edildi.\n"
+            f"Risk skoru: {result.risk_score}/100",
+        )
+
+    # ------------------------------------------------------------------
+    def refresh_findings(self):
+        for widget in self.findings_frame.winfo_children():
+            widget.destroy()
+        if self.result is None:
+            return
+
+        needle = self.entry_filter.get().strip().lower()
+        findings = [
+            finding
+            for finding in self.result.findings
+            if not needle
+            or needle in finding.file.lower()
+            or needle in finding.type.lower()
+        ]
+
+        if not findings:
+            ctk.CTkLabel(
+                self.findings_frame,
+                text="Gösterilecek bulgu yok." if needle else "Henüz tarama yapılmadı.",
+                text_color="gray",
+            ).pack(pady=20)
+            return
+
+        for finding in findings[:MAX_ROWS]:
+            severity = finding.severity_enum
+            row = ctk.CTkFrame(self.findings_frame, fg_color="#242423", corner_radius=8)
+            row.pack(fill="x", padx=6, pady=3)
+
+            ctk.CTkLabel(
+                row,
+                text=f"{severity.icon} {severity.label_tr}",
+                text_color=SEVERITY_COLORS[severity],
+                font=ctk.CTkFont(size=11, weight="bold"),
+                width=84,
+                anchor="w",
+            ).pack(side="left", padx=(10, 6), pady=7)
+
+            ctk.CTkLabel(
+                row,
+                text=finding.type,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                width=150,
+                anchor="w",
+            ).pack(side="left", padx=(0, 6))
+
+            location = f"{finding.file}:{finding.line}" if finding.line else finding.file
+            ctk.CTkLabel(
+                row,
+                text=location,
+                text_color="#c3c2b7",
+                font=ctk.CTkFont(size=11),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
+
+            ctk.CTkLabel(
+                row,
+                text=finding.content_masked,
+                text_color="#8f8e85",
+                font=ctk.CTkFont(family="Consolas", size=11),
+                anchor="e",
+            ).pack(side="right", padx=10)
+
+        if len(findings) > MAX_ROWS:
+            ctk.CTkLabel(
+                self.findings_frame,
+                text=f"… ve {len(findings) - MAX_ROWS} bulgu daha "
+                "(tam liste için rapor kaydedin)",
+                text_color="gray",
+            ).pack(pady=10)
+
+    def _draw_chart(self):
+        for widget in self.chart_area.winfo_children():
+            widget.destroy()
+        if self.result is None or not self.result.findings:
+            return
+
+        counts = self.result.counts_by_severity()
+        rows = [
+            (severity, counts.get(severity.value, 0))
+            for severity in sorted(Severity, key=lambda s: -s.rank)
+            if counts.get(severity.value, 0)
+        ]
+
+        if not HAS_MATPLOTLIB:
+            # Grafik kütüphanesi yoksa aynı bilgiyi çubuklarla göster.
+            total = sum(count for _, count in rows) or 1
+            for severity, count in rows:
+                line = ctk.CTkFrame(self.chart_area, fg_color="transparent")
+                line.pack(fill="x", pady=4)
+                ctk.CTkLabel(
+                    line,
+                    text=f"{severity.icon} {severity.label_tr}",
+                    text_color=SEVERITY_COLORS[severity],
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    width=90,
+                    anchor="w",
+                ).pack(side="left")
+                bar = ctk.CTkProgressBar(
+                    line, progress_color=SEVERITY_COLORS[severity], height=8
+                )
+                bar.pack(side="left", fill="x", expand=True, padx=6)
+                bar.set(count / total)
+                ctk.CTkLabel(line, text=str(count), width=34, anchor="e").pack(
+                    side="right"
+                )
+            return
+
+        figure, axes = plt.subplots(figsize=(3.2, 2.6), dpi=100)
+        figure.patch.set_facecolor("#1a1a19")
+        axes.set_facecolor("#1a1a19")
+
+        labels = [severity.label_tr for severity, _ in rows]
+        values = [count for _, count in rows]
+        colors = [SEVERITY_COLORS[severity] for severity, _ in rows]
+
+        bars = axes.barh(labels, values, color=colors, height=0.6)
+        axes.invert_yaxis()
+        axes.tick_params(colors="#c3c2b7", labelsize=8, length=0)
+        for spine in axes.spines.values():
+            spine.set_visible(False)
+        axes.set_xticks([])
+        for bar, value in zip(bars, values, strict=True):
+            axes.text(
+                bar.get_width() + max(values) * 0.02,
+                bar.get_y() + bar.get_height() / 2,
+                str(value),
+                va="center",
+                color="#f0efec",
+                fontsize=8,
+            )
+        figure.tight_layout()
+
+        canvas = FigureCanvasTkAgg(figure, master=self.chart_area)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+        plt.close(figure)
 
-    def open_html_report(self):
-        webbrowser.open('file://' + os.path.abspath("dashboard.html"))
-
-    def save_pdf_report(self):
-        if not self.last_results: return
-        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF Dosyası", "*.pdf")])
-        if path:
-            success, msg = create_pdf_report(self.last_results, path)
-            if success:
-                self.log(f"PDF Kaydedildi: {path}")
-                try: os.startfile(path)
-                except: pass
-
-    # --- KARANTİNA YÖNETİMİ ---
-    def refresh_quarantine_list(self):
-        for widget in self.q_list_frame.winfo_children():
-            widget.destroy()
-            
-        folder = self.qm.q_dir
-        if not os.path.exists(folder): return
-
-        files = [f for f in os.listdir(folder) if f.endswith('.enc')]
-        
-        if not files:
-            ctk.CTkLabel(self.q_list_frame, text="Karantina boş.", text_color="gray").pack(pady=20)
+    # ------------------------------------------------------------------
+    def save_report(self, fmt: str):
+        if self.result is None or not self.result.findings:
             return
 
-        for f in files:
-            row = ctk.CTkFrame(self.q_list_frame)
-            row.pack(fill="x", padx=5, pady=5)
-            
-            ctk.CTkLabel(row, text="🔒 " + f, font=("Consolas", 12)).pack(side="left", padx=10)
-            
-            ctk.CTkButton(row, text="Kurtar", width=80, fg_color="#8e44ad", 
-                          command=lambda fname=f: self.restore_single_file(fname)).pack(side="right", padx=10, pady=5)
+        extensions = {"html": ".html", "pdf": ".pdf", "csv": ".csv", "sarif": ".sarif"}
+        path = filedialog.asksaveasfilename(
+            defaultextension=extensions[fmt],
+            initialfile=f"sentinel_raporu{extensions[fmt]}",
+            filetypes=[(f"{fmt.upper()} dosyası", f"*{extensions[fmt]}")],
+        )
+        if not path:
+            return
 
-    def restore_single_file(self, filename):
-        full_path = os.path.join(self.qm.q_dir, filename)
-        status, res_path = self.qm.restore_file(full_path)
-        if status:
-            messagebox.showinfo("Başarılı", f"Dosya kurtarıldı:\n{res_path}")
-            self.refresh_quarantine_list()
+        directory = os.path.dirname(path) or "."
+        written = write_reports(self.result, directory, [fmt])
+        produced = written.get(fmt, "")
+
+        if str(produced).startswith("HATA"):
+            messagebox.showerror("Hata", f"Rapor yazılamadı:\n{produced}")
+            return
+
+        if os.path.abspath(produced) != os.path.abspath(path):
+            os.replace(produced, path)
+
+        self.log(f"Rapor kaydedildi: {path}")
+        open_path(path)
+
+    # ------------------------------------------------------------------
+    def refresh_vault(self):
+        for widget in self.vault_list.winfo_children():
+            widget.destroy()
+
+        items = self.qm.list_items()
+        if not items:
+            ctk.CTkLabel(
+                self.vault_list,
+                text=f"Kasa boş.\n{self.qm.q_dir}",
+                text_color="gray",
+            ).pack(pady=24)
+            return
+
+        for item in items:
+            row = ctk.CTkFrame(self.vault_list)
+            row.pack(fill="x", padx=5, pady=5)
+
+            info = ctk.CTkFrame(row, fg_color="transparent")
+            info.pack(side="left", fill="x", expand=True, padx=10, pady=8)
+
+            title = "🔒 " + item["name"]
+            if item.get("legacy"):
+                title += "   (eski format)"
+            ctk.CTkLabel(
+                info, text=title, font=ctk.CTkFont(size=12, weight="bold"), anchor="w"
+            ).pack(fill="x")
+            ctk.CTkLabel(
+                info,
+                text=item.get("original_path") or "(orijinal konum bilinmiyor)",
+                text_color="gray",
+                font=ctk.CTkFont(size=10),
+                anchor="w",
+            ).pack(fill="x")
+
+            ctk.CTkButton(
+                row,
+                text="Kurtar",
+                width=84,
+                fg_color="#6250d6",
+                command=lambda name=item["name"]: self.restore(name),
+            ).pack(side="right", padx=(0, 10), pady=8)
+
+    def verify_vault(self):
+        results = self.qm.verify_all()
+        if not results:
+            messagebox.showinfo("Bütünlük", "Kasa boş.")
+            return
+        bad = [entry for entry in results if not entry["ok"]]
+        if bad:
+            detail = "\n".join(f"✗ {entry['name']}: {entry['detail']}" for entry in bad)
+            messagebox.showerror(
+                "Bütünlük hatası", f"{len(bad)} dosya doğrulanamadı:\n\n{detail}"
+            )
         else:
-            messagebox.showerror("Hata", f"Kurtarılamadı: {res_path}")
+            messagebox.showinfo(
+                "Bütünlük", f"{len(results)} dosyanın tamamı doğrulandı."
+            )
+
+    def restore(self, name: str):
+        full = os.path.join(self.qm.q_dir, name)
+        ok, message = self.qm.restore_file(full)
+
+        if not ok and "üzerine yazılmadı" in message:
+            if messagebox.askyesno(
+                "Dosya mevcut",
+                f"{message}\n\nÜzerine yazılsın mı?",
+            ):
+                ok, message = self.qm.restore_file(full, force=True)
+
+        if ok:
+            messagebox.showinfo("Başarılı", f"Dosya kurtarıldı:\n{message}")
+            self.refresh_vault()
+        else:
+            messagebox.showerror("Hata", f"Kurtarılamadı:\n{message}")
+
+
+def main():
+    SentinelPro().mainloop()
+
 
 if __name__ == "__main__":
-    app = SentinelPro()
-    app.mainloop()
+    main()
