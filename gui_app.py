@@ -171,6 +171,13 @@ class SentinelPro(ctk.CTk):
         )
         self.entry_path.pack(side="left", fill="x", expand=True, padx=(10, 10))
         self.entry_path.insert(0, os.path.abspath(self.config_obj.target))
+
+        # Tk'de Ctrl+A varsayılan olarak "satır başına git" demektir; oysa
+        # her kullanıcı "tümünü seç" bekler. Bağlamazsak yazılan yeni yol
+        # mevcut metnin önüne eklenir ve tarama anlaşılmaz biçimde başarısız
+        # olur — GUI testinde tam olarak bu oldu.
+        self.entry_path.bind("<Control-a>", self._select_all_path)
+        self.entry_path.bind("<Control-A>", self._select_all_path)
         ctk.CTkButton(
             path_row, text="📂 Seç", width=86, height=40, command=self.browse_folder
         ).pack(side="left", padx=(0, 10))
@@ -367,12 +374,20 @@ class SentinelPro(ctk.CTk):
         self.log_area.configure(state="disabled")
 
     # ------------------------------------------------------------------
-    def _selected_severity(self) -> str:
+    def _select_all_path(self, _event=None):
+        self.entry_path.select_range(0, "end")
+        self.entry_path.icursor("end")
+        return "break"  # Tk'nin "satır başına git" varsayılanını engelle
+
+    def _selected_severity_enum(self) -> Severity:
         label = self.option_severity.get()
         for severity in Severity:
             if severity.label_tr == label:
-                return severity.value
-        return Severity.LOW.value
+                return severity
+        return Severity.LOW
+
+    def _selected_severity(self) -> str:
+        return self._selected_severity_enum().value
 
     def start_scan(self):
         target = self.entry_path.get().strip()
@@ -380,10 +395,15 @@ class SentinelPro(ctk.CTk):
             messagebox.showwarning("Uyarı", "Geçerli bir klasör ya da dosya seçin.")
             return
 
+        # Onay metni kullanıcının gördüğü etiketi kullanmalı. Ham enum
+        # değeri ('critical') yazmak, hem arayüzün geri kalanıyla
+        # ("Kritik") çelişiyor hem de veri SİLEN bir eylemin onayında
+        # anlaşılırlığı düşürüyordu.
+        esik = self._selected_severity_enum()
         if self.switch_quarantine.get() and not messagebox.askyesno(
             "Karantina onayı",
             "Aktif karantina açık.\n\n"
-            f"'{self._selected_severity()}' ve üstü bulgu içeren dosyalar "
+            f"“{esik.label_tr}” ve üstü bulgu içeren dosyalar "
             "şifrelenerek kasaya taşınacak ve ORİJİNALLERİ SİLİNECEK.\n\n"
             "Devam edilsin mi?",
         ):
