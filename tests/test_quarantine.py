@@ -1,0 +1,366 @@
+"""Karantina kasası testleri.
+
+v3.0'ın iki kritik kusuru burada doğrulanır:
+
+* "şifreleme" ``base64(reverse(bytes))`` idi — artık AES-256-GCM,
+* orijinal dosya şifreli kopya **doğrulanmadan** siliniyordu — artık
+  doğrulama başarısızsa orijinal yerinde kalır.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+
+import pytest
+
+from sentinel.quarantine import MAGIC, QuarantineManager, VaultError
+
+pytest.importorskip("cryptography")
+
+SECRET = "Müşteri TC: 10000000146\nKart: 4111111111111111\n"
+
+
+def _read(path: str) -> bytes:
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def _write(path: str, data: bytes):
+    with open(path, "wb") as handle:
+        handle.write(data)
+
+
+@pytest.fixture
+def vault(tmp_path, monkeypatch):
+    """Her test izole bir kasa ve anahtar kullanır."""
+    key = base64.b64encode(os.urandom(32)).decode("ascii")
+    monkeypatch.setenv("SENTINEL_VAULT_KEY", key)
+    return QuarantineManager(str(tmp_path / "kasa"))
+
+
+@pytest.fixture
+def victim(tmp_path):
+    path = tmp_path / "veri" / "gizli.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(SECRET, encoding="utf-8")
+    return path
+
+
+class TestQuarantine:
+    def test_moves_and_removes_original(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok, enc_path
+        assert not victim.exists()
+        assert os.path.isfile(enc_path)
+
+    def test_encrypted_blob_is_not_readable(self, vault, victim):
+        """Asıl mesele: dosya gerçekten şifrelenmeli, gizlenmemeli."""
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        blob = _read(enc_path)
+
+        assert blob.startswith(MAGIC)
+        assert b"10000000146" not in blob
+        assert b"4111111111111111" not in blob
+        # v3.0'ın şifresi tek satırla çözülüyordu; artık çözülmemeli.
+        try:
+            naive = base64.b64decode(blob)[::-1]
+        except Exception:
+            naive = b""
+        assert b"10000000146" not in naive
+
+    def test_roundtrip_restores_byte_for_byte(self, vault, victim):
+        original = victim.read_bytes()
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+
+        ok, restored_path = vault.restore_file(enc_path)
+        assert ok, restored_path
+        assert os.path.abspath(restored_path) == os.path.abspath(str(victim))
+        assert victim.read_bytes() == original
+
+    def test_manifest_records_provenance(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        items = vault.list_items()
+        assert len(items) == 1
+        entry = items[0]
+        assert entry["original_path"] == os.path.abspath(str(victim))
+        assert entry["sha256"] == hashlib.sha256(SECRET.encode()).hexdigest()
+        assert entry["algorithm"] == "AES-256-GCM"
+
+    def test_missing_file(self, vault, tmp_path):
+        ok, message = vault.quarantine_file(str(tmp_path / "yok.txt"))
+        assert not ok
+        assert "bulunamadı" in message
+
+
+class TestIntegrity:
+    def test_wrong_key_cannot_decrypt(self, vault, victim, monkeypatch, tmp_path):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+
+        other_key = base64.b64encode(os.urandom(32)).decode("ascii")
+        monkeypatch.setenv("SENTINEL_VAULT_KEY", other_key)
+        intruder = QuarantineManager(vault.q_dir)
+
+        ok, message = intruder.restore_file(enc_path)
+        assert not ok
+        assert "Çözme başarısız" in message
+
+    def test_tampered_ciphertext_is_detected(self, vault, victim):
+        """AES-GCM kimlik doğrulamalıdır: tek bitlik değişiklik yakalanır."""
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+
+        blob = bytearray(_read(enc_path))
+        blob[-5] ^= 0x01
+        _write(enc_path, bytes(blob))
+
+        ok, message = vault.restore_file(enc_path)
+        assert not ok
+        assert "kurcalanmış" in message or "başarısız" in message
+
+    def test_tampered_header_is_detected(self, vault, victim):
+        """Başlık AAD olarak bağlıdır; manifest kurcalanamaz."""
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+
+        blob = _read(enc_path)
+        tampered = blob.replace(b'"size"', b'"xize"', 1)
+        assert tampered != blob
+        _write(enc_path, tampered)
+
+        ok, _ = vault.restore_file(enc_path)
+        assert not ok
+
+    def test_original_survives_when_verification_fails(
+        self, vault, victim, monkeypatch
+    ):
+        """En kritik davranış: doğrulama başarısızsa orijinal SİLİNMEZ."""
+        monkeypatch.setattr(
+            QuarantineManager,
+            "_decrypt",
+            lambda self, blob: (b"yanlis-icerik", {}),
+        )
+        ok, message = vault.quarantine_file(str(victim))
+        assert not ok
+        assert "orijinal korundu" in message
+        assert victim.exists()
+        assert victim.read_text(encoding="utf-8") == SECRET
+        # Bozuk .enc kasada bırakılmamalı.
+        assert not any(name.endswith(".enc") for name in os.listdir(vault.q_dir))
+
+    def test_verify_all(self, vault, victim):
+        ok, _ = vault.quarantine_file(str(victim))
+        assert ok
+        results = vault.verify_all()
+        assert len(results) == 1
+        assert results[0]["ok"]
+
+
+class TestRestoreSafety:
+    def test_refuses_to_overwrite(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        victim.write_text("yeni icerik", encoding="utf-8")
+
+        ok, message = vault.restore_file(enc_path)
+        assert not ok
+        assert "üzerine yazılmadı" in message
+        assert victim.read_text(encoding="utf-8") == "yeni icerik"
+
+    def test_force_overwrites(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        victim.write_text("yeni icerik", encoding="utf-8")
+
+        ok, _ = vault.restore_file(enc_path, force=True)
+        assert ok
+        assert victim.read_text(encoding="utf-8") == SECRET
+
+    def test_recreates_deleted_directory(self, vault, victim):
+        import shutil
+
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        shutil.rmtree(victim.parent)
+
+        ok, restored = vault.restore_file(enc_path)
+        assert ok
+        assert os.path.isfile(restored)
+
+    def test_restore_to_explicit_target(self, vault, victim, tmp_path):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        target = tmp_path / "baska" / "yer.txt"
+
+        ok, restored = vault.restore_file(enc_path, str(target))
+        assert ok
+        assert target.read_text(encoding="utf-8") == SECRET
+
+    def test_restore_by_bare_name(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        ok, _ = vault.restore_file(os.path.basename(enc_path))
+        assert ok
+
+
+class TestLegacyCompatibility:
+    def test_reads_v3_base64_format(self, vault, tmp_path):
+        """Kullanıcıların kasasındaki eski dosyalar okunabilir kalmalı."""
+        legacy_blob = base64.b64encode(SECRET.encode("utf-8")[::-1])
+        enc_path = os.path.join(vault.q_dir, "1700000000_eski.txt.enc")
+        _write(enc_path, legacy_blob)
+
+        target = tmp_path / "geri" / "eski.txt"
+        ok, restored = vault.restore_file(enc_path, str(target))
+        assert ok, restored
+        assert target.read_text(encoding="utf-8") == SECRET
+
+    def test_reads_v3_json_manifest(self, vault, tmp_path):
+        legacy_blob = base64.b64encode(b"veri"[::-1])
+        name = "1700000000_eski.txt.enc"
+        _write(os.path.join(vault.q_dir, name), legacy_blob)
+
+        target = tmp_path / "hedef" / "eski.txt"
+        with open(vault.legacy_log_file, "w", encoding="utf-8") as handle:
+            json.dump({name: {"original_path": str(target)}}, handle)
+
+        ok, restored = vault.restore_file(name)
+        assert ok
+        assert os.path.abspath(restored) == os.path.abspath(str(target))
+
+    def test_reads_enc_meta_sidecar(self, vault, tmp_path):
+        """QUARANTINE_ZONE dizinindeki `.enc.meta` yan dosyaları."""
+        name = "Yeni Metin Belgesi.txt.enc"
+        _write(os.path.join(vault.q_dir, name), base64.b64encode(b"icerik"[::-1]))
+        target = tmp_path / "meta_hedef.txt"
+        with open(
+            os.path.join(vault.q_dir, f"{name}.meta"), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(str(target))
+
+        items = vault.list_items()
+        assert items[0]["original_path"] == str(target)
+        assert items[0]["legacy"] is True
+
+        ok, restored = vault.restore_file(name)
+        assert ok
+        assert os.path.abspath(restored) == os.path.abspath(str(target))
+
+    def test_legacy_blob_rejects_garbage(self, vault):
+        enc_path = os.path.join(vault.q_dir, "bozuk.enc")
+        _write(enc_path, b"\xff\xfe bu base64 degil \x00")
+        ok, _ = vault.restore_file(enc_path)
+        assert not ok
+
+
+class TestPurge:
+    def test_purge_single(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim))
+        assert ok
+        assert vault.purge(os.path.basename(enc_path)) == 1
+        assert vault.list_items() == []
+
+    def test_purge_all(self, vault, tmp_path):
+        for index in range(3):
+            path = tmp_path / f"d{index}.txt"
+            path.write_text(SECRET, encoding="utf-8")
+            vault.quarantine_file(str(path))
+        assert vault.purge() == 3
+        assert vault.list_items() == []
+
+    def test_shred_removes_the_file(self, vault, victim):
+        ok, enc_path = vault.quarantine_file(str(victim), shred=False)
+        assert ok
+        assert vault.purge(os.path.basename(enc_path), shred=True) == 1
+        assert not os.path.exists(enc_path)
+
+
+class TestKeyManagement:
+    def test_keyfile_is_created_with_restrictive_permissions(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SENTINEL_VAULT_KEY", raising=False)
+        monkeypatch.setenv("SENTINEL_HOME", str(tmp_path / "home"))
+
+        from sentinel.quarantine import default_key_path, load_or_create_key
+
+        key = load_or_create_key()
+        assert len(key) == 32
+
+        path = default_key_path()
+        assert os.path.isfile(path)
+        if os.name != "nt":
+            assert oct(os.stat(path).st_mode)[-3:] == "600"
+
+        # Aynı anahtar tekrar yüklenmeli (yoksa eski kasa açılamaz).
+        assert load_or_create_key() == key
+
+    def test_key_is_stored_outside_the_vault(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SENTINEL_VAULT_KEY", raising=False)
+        monkeypatch.setenv("SENTINEL_HOME", str(tmp_path / "home"))
+
+        from sentinel.quarantine import default_key_path
+
+        manager = QuarantineManager(str(tmp_path / "kasa"))
+        assert not default_key_path().startswith(manager.q_dir)
+
+    def test_passphrase_is_derived_deterministically(self, monkeypatch):
+        from sentinel.quarantine import load_or_create_key
+
+        monkeypatch.setenv("SENTINEL_VAULT_KEY", "benim-uzun-gizli-parolam")
+        first = load_or_create_key()
+        second = load_or_create_key()
+        assert first == second
+        assert len(first) == 32
+
+    def test_hex_key_is_accepted(self, monkeypatch):
+        from sentinel.quarantine import load_or_create_key
+
+        raw = os.urandom(32)
+        monkeypatch.setenv("SENTINEL_VAULT_KEY", raw.hex())
+        assert load_or_create_key() == raw
+
+
+class TestEngineIntegration:
+    def test_scanner_quarantines_only_above_threshold(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "SENTINEL_VAULT_KEY", base64.b64encode(os.urandom(32)).decode("ascii")
+        )
+        from sentinel.config import ScanConfig
+        from sentinel.engine import Scanner
+        from sentinel.severity import Severity
+
+        (tmp_path / "kritik.txt").write_text(
+            "Kart: 4111111111111111\n", encoding="utf-8"
+        )
+        (tmp_path / "dusuk.txt").write_text("mail: a@adu.edu.tr\n", encoding="utf-8")
+
+        config = ScanConfig(
+            min_severity=Severity.INFO.value,
+            entropy_scan=False,
+            yara_enabled=False,
+            workers=1,
+            executor="serial",
+            quarantine=True,
+            quarantine_dir=str(tmp_path / "kasa"),
+            quarantine_min_severity=Severity.CRITICAL.value,
+        )
+        result = Scanner(str(tmp_path), config=config).scan()
+
+        assert len(result.quarantined) == 1
+        assert not (tmp_path / "kritik.txt").exists()
+        assert (tmp_path / "dusuk.txt").exists()
+
+    def test_reveal_does_not_raise(self, vault, tmp_path):
+        """v3.0 burada `subprocess`'i import etmeyi unutmuştu."""
+        path = tmp_path / "x.txt"
+        path.write_text("x", encoding="utf-8")
+        assert isinstance(vault.reveal(str(path)), bool)
+
+
+def test_vault_error_is_an_exception():
+    assert issubclass(VaultError, Exception)
