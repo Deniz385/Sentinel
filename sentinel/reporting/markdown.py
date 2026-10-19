@@ -13,6 +13,7 @@ from sentinel.severity import Severity
 __all__ = ["write", "render"]
 
 MAX_ROWS = 100
+MAX_GROUPS = 20
 
 
 def _escape(value: str) -> str:
@@ -27,12 +28,19 @@ def render(result) -> str:
         "",
         f"- **Hedef:** `{_escape(result.target)}`",
         f"- **Risk skoru:** {result.risk_score}/100",
-        f"- **Bulgu:** {len(result.findings)}",
+        f"- **Bulgu:** {len(result.findings)} "
+        f"(**{result.unique_count}** tekil sır)",
         f"- **Taranan dosya:** {result.files_scanned} "
         f"(atlanan: {result.files_skipped})",
         f"- **Süre:** {result.duration:.2f} sn",
         "",
     ]
+    if result.files_cached:
+        lines.insert(
+            -1,
+            f"- **Önbellekten geçilen dosya:** {result.files_cached} "
+            "(içeriği değişmemiş)",
+        )
 
     if not result.findings:
         lines.append("✅ **Eşik üstü hassas veri bulunamadı.**")
@@ -47,6 +55,25 @@ def render(result) -> str:
         if count:
             lines.append(f"| {severity.icon} {severity.label_tr} | {count} |")
     lines.append("")
+
+    shared = result.shared_secrets()
+    if shared:
+        # Önce bunlar: aynı değerin N dosyadaki kopyası tek bir işle
+        # (anahtarı iptal et / veriyi kaldır) kapanır.
+        lines.append("## Birden fazla dosyaya kopyalanmış sırlar")
+        lines.append("")
+        lines.append("| Önem | Tür | Dosya | Bulgu | İçerik (maskeli) |")
+        lines.append("| --- | --- | ---: | ---: | --- |")
+        for group in shared[:MAX_GROUPS]:
+            lines.append(
+                f"| {group.severity_enum.label_tr} | `{_escape(group.type)}` "
+                f"| {group.file_count} | {group.count} "
+                f"| `{_escape(group.content_masked)}` |"
+            )
+        if len(shared) > MAX_GROUPS:
+            lines.append("")
+            lines.append(f"_… ve {len(shared) - MAX_GROUPS} sır daha._")
+        lines.append("")
 
     lines.append("## Bulgular")
     lines.append("")

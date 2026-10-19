@@ -125,7 +125,8 @@ def write(result, output_path: str) -> tuple[bool, str]:
             f"Oluşturulma: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}<br/>"
             f"Hedef: {escape(result.target)}<br/>"
             f"Risk skoru: <b>{result.risk_score}/100</b> &nbsp;·&nbsp; "
-            f"Bulgu: <b>{len(result.findings)}</b> &nbsp;·&nbsp; "
+            f"Bulgu: <b>{len(result.findings)}</b> "
+            f"({result.unique_count} tekil sır) &nbsp;·&nbsp; "
             f"Taranan dosya: {result.files_scanned} &nbsp;·&nbsp; "
             f"Süre: {result.duration:.2f} sn",
             normal,

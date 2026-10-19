@@ -40,6 +40,8 @@ class FileReport:
     skipped: str = ""
     size: int = 0
     sha256: str = "N/A"
+    #: Dosya hiç okunmadı; sonuç artımlı tarama önbelleğinden geldi.
+    cached: bool = False
 
 
 @dataclass
@@ -56,10 +58,37 @@ class ScanResult:
     started_at: str = ""
     cancelled: bool = False
     quarantined: list = field(default_factory=list)
+    #: Artımlı tarama önbelleğinden gelen (hiç okunmayan) dosya sayısı.
+    files_cached: int = 0
+    #: `groups()` belleği. Raporlayıcılar aynı gruplamayı birkaç kez
+    #: istiyor; 200 bin bulguda her çağrıda yeniden gruplamanın anlamı yok.
+    _groups: tuple | None = field(default=None, repr=False, compare=False)
 
     @property
     def risk_score(self) -> int:
         return risk_score(self.findings)
+
+    # -- çapraz dosya korelasyonu -----------------------------------------
+    def groups(self, max_locations: int | None = None) -> list:
+        """Bulguları tekil sırlara indirger (bkz. `sentinel.correlation`)."""
+        from sentinel.correlation import MAX_LOCATIONS, group_findings
+
+        limit = MAX_LOCATIONS if max_locations is None else max_locations
+        signature = (len(self.findings), limit)
+        if self._groups is not None and self._groups[0] == signature:
+            return self._groups[1]
+        computed = group_findings(self.findings, max_locations=limit)
+        self._groups = (signature, computed)
+        return computed
+
+    @property
+    def unique_count(self) -> int:
+        """Tekil hassas değer sayısı — kapatılacak gerçek iş kalemi sayısı."""
+        return len(self.groups())
+
+    def shared_secrets(self) -> list:
+        """Birden fazla dosyaya kopyalanmış sırlar, en yaygın önce."""
+        return [group for group in self.groups() if group.shared]
 
     def counts_by_severity(self) -> dict:
         counts = {severity.value: 0 for severity in Severity}
@@ -88,8 +117,13 @@ class ScanResult:
             "duration_seconds": round(self.duration, 4),
             "files_scanned": self.files_scanned,
             "files_skipped": self.files_skipped,
+            "files_cached": self.files_cached,
             "bytes_scanned": self.bytes_scanned,
             "findings": len(self.findings),
+            # Bulgu sayısı kopyalama alışkanlığını, tekil sır sayısı ise
+            # kapatılacak gerçek iş kalemini ölçer.
+            "unique_secrets": self.unique_count,
+            "shared_secrets": len(self.shared_secrets()),
             "risk_score": self.risk_score,
             "highest_severity": (
                 self.highest_severity().value if self.findings else None
@@ -226,6 +260,32 @@ class Scanner:
 
             self.qm = QuarantineManager(self.config.quarantine_dir)
 
+        self._cache = self._open_cache()
+
+    def _open_cache(self):
+        """Artımlı tarama önbelleğini açar (kapalıysa `None`)."""
+        if not self.config.incremental:
+            return None
+        if self.config.quarantine:
+            # Önbellek "bu dosyada sır vardı" kararını tazeliğini
+            # kanıtlamadan devralır; o karar dosyayı SİLEN bir eyleme
+            # dönüşüyorsa bayat kanıtla hareket etmek kabul edilemez.
+            self._log(
+                "Karantina açık — artımlı önbellek devre dışı bırakıldı "
+                "(veri silen karar bayat kanıta dayanamaz)."
+            )
+            return None
+
+        from sentinel.cache import DEFAULT_CACHE_NAME, ScanCache
+
+        cache = ScanCache.open(self.config.cache_path or DEFAULT_CACHE_NAME, self.config)
+        if cache.invalidated:
+            self._log(
+                "Yapılandırma ya da kural kataloğu değişmiş — önbellek "
+                "tamamen geçersiz, tam tarama yapılıyor."
+            )
+        return cache
+
     # -- eski API ---------------------------------------------------------
     @property
     def use_ocr(self) -> bool:
@@ -274,6 +334,12 @@ class Scanner:
         extensions = set(self.config.extensions)
         excluded = set(self.config.exclude_dirs)
         allowlist = self.config.allowlist
+        # Kendi önbellek dosyamızı taramak anlamsız: içinde maskelenmiş
+        # değerler ve parmak izleri var, bunlar entropi kuralını gereksiz
+        # yere tetikler ve rapor kendi kendini raporlar.
+        own_cache = (
+            os.path.abspath(self._cache.path) if self._cache is not None else None
+        )
 
         for root, dirs, files in os.walk(target, followlinks=self.config.follow_symlinks):
             if self._stop.is_set():
@@ -300,6 +366,8 @@ class Scanner:
                 if allowlist.allows_path(path):
                     continue
                 if not self.config.follow_symlinks and os.path.islink(path):
+                    continue
+                if own_cache is not None and os.path.abspath(path) == own_cache:
                     continue
                 yield path
 
@@ -331,12 +399,40 @@ class Scanner:
         result.findings.sort(key=lambda f: f.sort_key())
         result.duration = time.monotonic() - started
 
+        if self._cache is not None:
+            self._cache.save()
+            self._log(
+                f"Önbellek: {self._cache.stats.hits} dosya atlandı, "
+                f"{self._cache.stats.stale} dosya değişmiş, "
+                f"{self._cache.stats.misses} dosya yeni."
+            )
+
         self._audit(result)
         self._notify(result)
         return result
 
     # -- yürütme stratejisi ----------------------------------------------
     def _run(self, paths):
+        """Önce önbellekten karşılananları, sonra taze taramaları verir."""
+        if self._cache is None:
+            yield from self._execute(paths)
+            return
+
+        fresh = []
+        for path in paths:
+            if self._stop.is_set():
+                return
+            report = self._cache.lookup(path)
+            if report is None:
+                fresh.append(path)
+            else:
+                yield report
+
+        for report in self._execute(fresh):
+            self._cache.remember(report)
+            yield report
+
+    def _execute(self, paths):
         mode = self._executor_mode(len(paths))
 
         if mode == "serial":
@@ -426,6 +522,8 @@ class Scanner:
 
         result.files_scanned += 1
         result.bytes_scanned += report.size
+        if report.cached:
+            result.files_cached += 1
 
         findings = self._filter(report.findings)
         if not findings:

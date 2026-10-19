@@ -15,6 +15,10 @@ exclude_globs:
   - "*.min.js"
   - "*.lock"
   - "htmlcov/**"
+  # Artımlı tarama önbelleği. Motor kendi önbelleğini zaten atlar; bu
+  # satır, önbellek başka bir yoldan (ör. `--no-incremental` ile) taranan
+  # bir ağaçta kalmışsa da gürültü yapmasını engeller.
+  - ".sentinel-cache.json"
 
 entropy_scan: true
 archive_enabled: true

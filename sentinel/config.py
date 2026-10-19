@@ -109,6 +109,12 @@ class ScanConfig:
     # --- denetim ---
     audit_log: str = ""
 
+    # --- artımlı tarama ---
+    #: Varsayılan kapalı: bir güvenlik aracı, sorulmadan "bu dosya
+    #: değişmemiş" varsayımına dayanmamalı.
+    incremental: bool = False
+    cache_path: str = ""
+
     # ------------------------------------------------------------------
     def __post_init__(self):
         # Boş dize "uzantısız dosya" demektir (id_rsa, Dockerfile,
@@ -233,6 +239,7 @@ class ScanConfig:
             "SENTINEL_AUDIT_LOG": "audit_log",
             "SENTINEL_YARA_RULES_DIR": "yara_rules_dir",
             "SENTINEL_EXECUTOR": "executor",
+            "SENTINEL_CACHE_PATH": "cache_path",
         }
         for key, attr in mapping_str.items():
             if env.get(key):
@@ -252,6 +259,7 @@ class ScanConfig:
             ("SENTINEL_OCR", "ocr"),
             ("SENTINEL_ENTROPY_SCAN", "entropy_scan"),
             ("SENTINEL_YARA", "yara_enabled"),
+            ("SENTINEL_INCREMENTAL", "incremental"),
         ):
             if env.get(key):
                 overrides[attr] = env[key].strip().lower() in ("1", "true", "yes", "on")
@@ -314,6 +322,12 @@ allowlist:
   rules: []
   use_defaults: true
   inline: true
+
+# Artımlı tarama: değişmemiş dosyaları önbellekten geçer.
+# Kural kataloğu ya da bu dosya değişirse önbellek kendiliğinden düşer.
+# Karantina açıkken hiç kullanılmaz (veri silen karar bayat kanıta dayanamaz).
+incremental: false
+# cache_path: .sentinel-cache.json
 
 # Denetim izi (JSONL)
 # audit_log: logs/audit.jsonl

@@ -22,6 +22,9 @@ def to_dict(result) -> dict:
         "quarantined": list(result.quarantined),
         "errors": result.errors,
         "findings": [finding.to_dict() for finding in result.findings],
+        # Tekil sırlar: aynı değerin tüm kopyaları tek kayıtta. SIEM'de
+        # "40 uyarı" yerine "1 anahtar, 40 konum" olarak görünür.
+        "secrets": [group.to_dict() for group in result.groups()],
     }
 
 
