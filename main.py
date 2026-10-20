@@ -1,72 +1,38 @@
-# main.py (CLI VERSION)
+#!/usr/bin/env python3
+"""Sentinel CLI giriş noktası.
+
+Asıl uygulama `sentinel` paketindedir; bu dosya `python main.py` ile
+çalıştırmaya alışmış kullanıcılar için ince bir sarmalayıcıdır.
+Kurulumdan sonra `sentinel` komutu da aynı işi yapar.
+
+Eski kullanım korunur:
+    python main.py --target test_data --no-html
+Yeni kullanım:
+    python main.py scan test_data --format html,csv,sarif
+"""
+
 import os
 import sys
-import time
-import argparse
-import pandas as pd
 
-sys.path.append(os.path.abspath('src'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner import Scanner
-from reporter import generate_html_report
+from sentinel.cli import main as cli_main  # noqa: E402
 
-def main():
-    # CLI Argümanlarını Tanımla
-    parser = argparse.ArgumentParser(description="Advanced Sensitive Data Discovery Tool (DLP)")
-    parser.add_argument("--target", "-t", help="Taranacak hedef klasör", default="test_data")
-    parser.add_argument("--output", "-o", help="Raporların kaydedileceği dizin", default=".")
-    parser.add_argument("--no-html", help="HTML raporu oluşturma", action="store_true")
-    
-    args = parser.parse_args()
+# v3.0'da alt komut yoktu; argümanlar doğrudan verilince `scan` varsayılır.
+_COMMANDS = {
+    "scan", "watch", "vault", "rules", "precommit", "init", "doctor",
+    "-h", "--help", "--version",
+}
 
-    print("==========================================")
-    print("   🛡️ SENTINEL DATA SCANNER v3.0 (CLI)    ")
-    print("==========================================")
-    
-    # Hedef klasör kontrolü
-    target_folder = args.target
-    if not os.path.exists(target_folder):
-        # Demo modu: Klasör yoksa oluştur
-        if target_folder == "test_data":
-            os.makedirs(target_folder)
-            print("[INIT] Demo klasörü oluşturuldu.")
-            # Buraya demo data oluşturma fonksiyonu çağrılabilir
-        else:
-            print(f"[HATA] Hedef klasör bulunamadı: {target_folder}")
-            return
 
-    print(f"[INFO] Hedef: {os.path.abspath(target_folder)}")
-    print(f"[INFO] Modüller: PDF, Excel, ZIP, Text, Regex, Algoritmik Doğrulama")
-    
-    scanner = Scanner(target_folder)
-    
-    start_time = time.time()
-    results = scanner.start_scan_parallel() # Paralel tarama
-    duration = time.time() - start_time
-    
-    print(f"\n[SONUÇ] Analiz Tamamlandı.")
-    print(f"[PERFORMANS] Süre: {duration:.4f} sn | Taranan: {target_folder}")
-    
-    if results:
-        print(f"[ALARM] {len(results)} kritik veri tespit edildi.")
-        
-        # DataFrame oluştur
-        df = pd.DataFrame(results)
-        
-        # CSV Kaydet
-        csv_path = os.path.join(args.output, "scan_results.csv")
-        df.to_csv(csv_path, index=False)
-        print(f"[+] CSV Rapor: {csv_path}")
-        
-        # HTML Kaydet (İstenirse)
-        if not args.no_html:
-            html_path = os.path.join(args.output, "dashboard.html")
-            generate_html_report(results, html_path)
-            # Windows'ta otomatik aç
-            if os.name == 'nt':
-                os.system(f"start {html_path}")
-    else:
-        print("[OK] Sistem temiz. Sızıntı tespit edilmedi.")
+def main() -> int:
+    argv = sys.argv[1:]
+    if argv and argv[0] not in _COMMANDS and not argv[0].startswith("--no-color"):
+        argv = ["scan"] + argv
+    elif not argv:
+        argv = ["scan"]
+    return cli_main(argv)
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

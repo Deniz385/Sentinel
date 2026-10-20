@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  # `push` YALNIZCA varsayılan dalda. Bir dala push, o dalın açık bir
+  # PR'ı varsa zaten `pull_request` olayını da tetikler; ikisinin
+  # `github.ref`i farklı olduğu için (refs/heads/... ve refs/pull/N/merge)
+  # aşağıdaki eşzamanlılık grubuna da düşmezler. Sonuç: her push'ta iki
+  # tam çalışma, yani CI dakikalarının iki katı harcanması.
+  #
+  # PR'ı olmayan bir dalda CI çalıştırmak için `workflow_dispatch` var.
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Bir PR'a üst üste push atıldığında eskisini iptal et; ama varsayılan
+  # dalda her commit'in kendi sonucu olmalı (Code Scanning temel çizgisi
+  # ve sürüm geçmişi için), orada iptal etme.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }} · Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Araç çapraz platform olduğunu iddia ediyor; CI bunu kanıtlamalı.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.13"]
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Bağımlılıkları kur
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,docs,pdf,monitor,notify]"
+
+      # YARA derlenmiş bir eklenti gerektirir ve her platform/sürüm
+      # bileşiminde hazır paketi (wheel) olmayabilir. Kurulabildiği yerde
+      # kuruyoruz ki `rules/*.yar` gerçekten derlensin; kurulamadığı yerde
+      # ilgili testler atlanır ve iş düşmez.
+      - name: YARA (en iyi gayret)
+        continue-on-error: true
+        run: pip install -e ".[yara]"
+
+      - name: Testler
+        run: pytest -q --cov=sentinel --cov-report=term-missing
+
+      - name: CLI dumanı (smoke)
+        run: |
+          sentinel --version
+          sentinel doctor
+          sentinel rules --json > /dev/null
+        shell: bash
+
+      - name: Çekirdek kurulum eklentisiz çalışmalı
+        # Bir güvenlik aracı, isteğe bağlı bağımlılıkları yokken de
+        # açılmalı ve metin taramasını yapmalı.
+        run: |
+          python -m venv /tmp/cekirdek || python -m venv $RUNNER_TEMP/cekirdek
+          python - <<'PY'
+          import os, subprocess, sys, venv, tempfile
+          base = tempfile.mkdtemp()
+          venv.create(base, with_pip=True)
+          bindir = "Scripts" if os.name == "nt" else "bin"
+          python = os.path.join(base, bindir, "python")
+          subprocess.run([python, "-m", "pip", "install", "-q", "."], check=True)
+          subprocess.run([python, "-c", "import sentinel.cli; print('core import ok')"], check=True)
+          PY
+        shell: bash
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+        continue-on-error: true
+
+  dogfood:
+    name: Sentinel kendi deposunu tarar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[docs]"
+
+      # Depoda gerçek bir sır kalmadığını her PR'da doğrula.
+      # Kapsam ve allowlist depodaki `sentinel.yml`den gelir — böylece
+      # o dosya da her commit'te sınanmış olur.
+      - name: Sır taraması
+        run: sentinel scan . --format sarif,md --fail-on high
+
+      - name: Özeti iş çıktısına yaz
+        if: always()
+        run: cat scan_report.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: sentinel.sarif
+          category: sentinel-dlp

@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-dlp"
+version = "4.0.0"
+description = "Hassas veri keşif ve sızıntı önleme (DLP) aracı — KVKK/GDPR/PCI-DSS"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Deniz Arda Çelik" }]
+keywords = ["dlp", "kvkk", "gdpr", "pci-dss", "security", "secrets", "pii", "sarif"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Natural Language :: Turkish",
+]
+
+# Çekirdek bağımlılıklar kasıtlı olarak azdır: bir güvenlik aracının
+# bağımlılık ağacı kendi saldırı yüzeyidir. Biçim okuyucuları ve GUI
+# isteğe bağlı eklentilerdedir.
+dependencies = [
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+docs = ["pypdf>=4.0", "python-docx>=1.1", "openpyxl>=3.1", "python-pptx>=0.6.23"]
+ocr = ["pytesseract>=0.3.10", "Pillow>=10.0"]
+monitor = ["watchdog>=4.0"]
+notify = ["requests>=2.31"]
+pdf = ["reportlab>=4.0"]
+yara = ["yara-python>=4.5"]
+gui = ["customtkinter>=5.2", "matplotlib>=3.8"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+all = [
+    "pypdf>=4.0", "python-docx>=1.1", "openpyxl>=3.1", "python-pptx>=0.6.23",
+    "pytesseract>=0.3.10", "Pillow>=10.0", "watchdog>=4.0", "requests>=2.31",
+    "reportlab>=4.0", "customtkinter>=5.2", "matplotlib>=3.8",
+]
+
+[project.scripts]
+sentinel = "sentinel.cli:main"
+
+[project.gui-scripts]
+sentinel-gui = "gui_app:main"
+
+[project.urls]
+Homepage = "https://github.com/deniz385/Sentinel"
+Issues = "https://github.com/deniz385/Sentinel/issues"
+
+[tool.setuptools]
+py-modules = ["gui_app", "restore_tool"]
+
+[tool.setuptools.packages.find]
+include = ["sentinel*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = ["error::DeprecationWarning:sentinel.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    "E501",    # satır uzunluğu — formatter'a bırakıldı
+    "B008",    # argüman varsayılanında çağrı (dataclass field ile çakışır)
+    "SIM105",  # contextlib.suppress — açık try/except daha okunur
+]
+
+[tool.ruff.lint.per-file-ignores]
+# sys.path ayarı importlardan önce gelmek zorunda.
+"tests/*" = ["E402"]
+"main.py" = ["E402"]
+"restore_tool.py" = ["E402", "SIM102"]
+# GUI importları, customtkinter varlık denetiminden sonra gelmeli;
+# yoksa bağımlılık eksikken ham ImportError ile çöker.
+"gui_app.py" = ["E402", "SIM102"]
+# `_open_text` kasıtlı olarak açık bir tanıtıcı döndürür: akışlı okuma
+# için gereklidir, kapatma çağıranın `finally` blokundadır.
+"sentinel/extractors/plain.py" = ["SIM115"]
+# İç içe `if`ler burada ayrı gerekçeleri yorumlarıyla taşıyor; tek
+# satıra toplamak okunurluğu düşürür.
+"sentinel/allowlist.py" = ["SIM102"]
+"sentinel/matcher.py" = ["SIM102"]

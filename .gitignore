@@ -1,26 +1,64 @@
-# Python gereksizleri
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+.eggs/
 
-# Sanal Ortamlar
+# --- Sanal ortamlar ---
 venv/
+.venv/
 env/
 .env
+.env.*
+!.env.example
 
-# PyInstaller Çıktıları (EXE'yi kodun içine atma, onu Releases kısmına koyacağız)
+# --- Paketleme çıktıları ---
 build/
 dist/
 *.spec
 
-# Karantina ve Loglar (Gizlilik!)
-KARANTINA_BOLGESI/
-*.log
-*.enc
-karantina_kayitlari.json
+# --- Test / lint önbellekleri ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
-# IDE Ayarları
+# --- KARANTİNA VE SIRLAR (gizlilik!) ---
+# Karantina kasası hassas veri içerir; ASLA commit edilmez.
+KARANTINA_BOLGESI/
+QUARANTINE_ZONE/
+*.enc
+*.enc.meta
+manifest.json
+karantina_kayitlari.json
+*.key
+vault.key
+
+# --- Tarama çıktıları (üretilen dosyalar; depoya ait değil) ---
+dashboard.html
+scan_results.*
+scan_report.*
+sentinel.sarif
+baseline.json
+logs/
+*.log
+
+# --- Artımlı tarama önbelleği (yerel durum; makineye özgüdür) ---
+.sentinel-cache.json
+.sentinel-cache.json.tmp
+
+# --- Üretilen test verisi (52 MB'lık dosya v3.0'da commit edilmişti) ---
+big_test_data.txt
+big_*.txt
+
+# --- Yerel yapılandırma ---
+sentinel.local.yml
+
+# --- IDE / işletim sistemi ---
 .vscode/
 .idea/
-# Güvenlik Anahtarları
-*.key
+.DS_Store
+Thumbs.db
