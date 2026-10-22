@@ -128,10 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  sentinel scan ~/Belgeler --format html,csv\n"
+            "  sentinel scan ~/Documents --format html,csv\n"
             "  sentinel scan . --fail-on high --format sarif\n"
             "  sentinel scan . --ocr --quarantine --min-severity high\n"
-            "  sentinel watch ~/Indirilenler\n"
+            "  sentinel watch ~/Downloads\n"
             "  sentinel vault list\n"
             "  sentinel precommit\n"
         ),
@@ -417,7 +417,7 @@ def cmd_scan(args, style: _Style) -> int:
         written = write_reports(result, args.output, formats)
         print()
         for fmt, path in written.items():
-            if str(path).startswith("HATA"):
+            if str(path).startswith("ERROR"):
                 print(style.yellow(f"  [{fmt}] {path}"))
             else:
                 print(f"  {style.green('✓')} {fmt:<6} {path}")

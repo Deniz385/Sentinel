@@ -24,7 +24,7 @@ def make_result(findings=None, **kwargs) -> ScanResult:
         "files_scanned": 3,
         "bytes_scanned": 1024,
         "duration": 0.42,
-        "target": "/proje",
+        "target": "/project",
         "started_at": "2026-01-01T00:00:00+00:00",
     }
     defaults.update(kwargs)
@@ -266,7 +266,7 @@ class TestSarif:
         from sentinel.reporting.sarif import write
 
         path = tmp_path / "out.sarif"
-        write(make_result([finding()], target="/proje"), str(path))
+        write(make_result([finding()], target="/project"), str(path))
         entry = json.loads(path.read_text(encoding="utf-8"))["runs"][0]["results"][0]
 
         assert entry["ruleId"] == "TR_NATIONAL_ID"
@@ -281,7 +281,7 @@ class TestSarif:
 
         path = tmp_path / "out.sarif"
         write(
-            make_result([finding(file="/proje/src/app.py")], target="/proje"),
+            make_result([finding(file="/project/src/app.py")], target="/project"),
             str(path),
         )
         entry = json.loads(path.read_text(encoding="utf-8"))["runs"][0]["results"][0]
@@ -394,7 +394,7 @@ class TestWriteReports:
     def test_writes_every_format(self, tmp_path):
         written = write_reports(make_result([finding()]), str(tmp_path), FORMATS)
         for fmt, path in written.items():
-            assert not str(path).startswith("HATA"), f"{fmt}: {path}"
+            assert not str(path).startswith("ERROR"), f"{fmt}: {path}"
             assert tmp_path.joinpath(str(path)).exists() or str(path).startswith(
                 str(tmp_path)
             )

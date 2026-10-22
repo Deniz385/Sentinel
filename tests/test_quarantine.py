@@ -38,7 +38,7 @@ def vault(tmp_path, monkeypatch):
     """Every test uses an isolated vault and key."""
     key = base64.b64encode(os.urandom(32)).decode("ascii")
     monkeypatch.setenv("SENTINEL_VAULT_KEY", key)
-    return QuarantineManager(str(tmp_path / "kasa"))
+    return QuarantineManager(str(tmp_path / "vault"))
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ class TestQuarantine:
         assert entry["algorithm"] == "AES-256-GCM"
 
     def test_missing_file(self, vault, tmp_path):
-        ok, message = vault.quarantine_file(str(tmp_path / "yok.txt"))
+        ok, message = vault.quarantine_file(str(tmp_path / "missing.txt"))
         assert not ok
         assert "not found" in message
 
@@ -157,7 +157,7 @@ class TestIntegrity:
         monkeypatch.setattr(
             QuarantineManager,
             "_decrypt",
-            lambda self, blob: (b"yanlis-icerik", {}),
+            lambda self, blob: (b"wrong-content", {}),
         )
         ok, message = vault.quarantine_file(str(victim))
         assert not ok
@@ -209,7 +209,7 @@ class TestRestoreSafety:
     def test_restore_to_explicit_target(self, vault, victim, tmp_path):
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
-        target = tmp_path / "baska" / "yer.txt"
+        target = tmp_path / "elsewhere" / "file.txt"
 
         ok, restored = vault.restore_file(enc_path, str(target))
         assert ok
@@ -226,7 +226,7 @@ class TestLegacyCompatibility:
     def test_reads_v3_base64_format(self, vault, tmp_path):
         """Old files in users' vaults must stay readable."""
         legacy_blob = base64.b64encode(SECRET.encode("utf-8")[::-1])
-        enc_path = os.path.join(vault.q_dir, "1700000000_eski.txt.enc")
+        enc_path = os.path.join(vault.q_dir, "1700000000_legacy.txt.enc")
         _write(enc_path, legacy_blob)
 
         target = tmp_path / "restored" / "old.txt"
@@ -236,7 +236,7 @@ class TestLegacyCompatibility:
 
     def test_reads_v3_json_manifest(self, vault, tmp_path):
         legacy_blob = base64.b64encode(b"data"[::-1])
-        name = "1700000000_eski.txt.enc"
+        name = "1700000000_legacy.txt.enc"
         _write(os.path.join(vault.q_dir, name), legacy_blob)
 
         target = tmp_path / "destination" / "old.txt"
@@ -251,7 +251,7 @@ class TestLegacyCompatibility:
         """The `.enc.meta` sidecar files in a QUARANTINE_ZONE directory."""
         name = "New Text Document.txt.enc"
         _write(os.path.join(vault.q_dir, name), base64.b64encode(b"content"[::-1]))
-        target = tmp_path / "meta_hedef.txt"
+        target = tmp_path / "meta_target.txt"
         with open(
             os.path.join(vault.q_dir, f"{name}.meta"), "w", encoding="utf-8"
         ) as handle:
@@ -318,13 +318,13 @@ class TestKeyManagement:
 
         from sentinel.quarantine import default_key_path
 
-        manager = QuarantineManager(str(tmp_path / "kasa"))
+        manager = QuarantineManager(str(tmp_path / "vault"))
         assert not default_key_path().startswith(manager.q_dir)
 
     def test_passphrase_is_derived_deterministically(self, monkeypatch):
         from sentinel.quarantine import load_or_create_key
 
-        monkeypatch.setenv("SENTINEL_VAULT_KEY", "benim-uzun-gizli-parolam")
+        monkeypatch.setenv("SENTINEL_VAULT_KEY", "my-long-secret-passphrase")
         first = load_or_create_key()
         second = load_or_create_key()
         assert first == second
@@ -359,7 +359,7 @@ class TestEngineIntegration:
             workers=1,
             executor="serial",
             quarantine=True,
-            quarantine_dir=str(tmp_path / "kasa"),
+            quarantine_dir=str(tmp_path / "vault"),
             quarantine_min_severity=Severity.CRITICAL.value,
         )
         result = Scanner(str(tmp_path), config=config).scan()

@@ -166,7 +166,7 @@ class TestPersonalData:
         assert "TR_PHONE" in types_in(findings)
 
     def test_landline_is_not_a_gsm(self, config):
-        findings = Matcher(config).scan_text("Sabit hat: 0212 123 45 67", "x.txt")
+        findings = Matcher(config).scan_text("Landline: 0212 123 45 67", "x.txt")
         assert "TR_PHONE" not in types_in(findings)
 
     @pytest.mark.parametrize(
@@ -244,21 +244,21 @@ class TestSecrets:
         assert "AWS_ACCESS_KEY" not in types_in(findings)
 
     def test_hardcoded_password(self, config):
-        findings = Matcher(config).scan_text('password = "GizliSifre123"', "x.txt")
+        findings = Matcher(config).scan_text('password = "SecretPass123"', "x.txt")
         finding = next(f for f in findings if f.type == "HARDCODED_PASS")
         # What is masked must be the password itself, not "password = ...".
-        assert finding.content_masked.startswith("Gi")
+        assert finding.content_masked.startswith("Se")
         assert finding.content_masked.endswith("23")
-        assert "GizliSifre123" not in finding.content_masked
+        assert "SecretPass123" not in finding.content_masked
 
     @pytest.mark.parametrize(
         "line",
         [
             'API_TOKEN = "Zx9Kq2mWpL7vR4tY8nB3"',
             'DB_PASSWORD = "S3cr3tP4ssw0rd"',
-            'app.secret = "cok-gizli-deger"',
+            'app.secret = "very-secret-value"',
             'AUTH-TOKEN: "abc12345"',
-            'TOKEN_VALUE = "degerli-sir-123"',
+            'TOKEN_VALUE = "precious-secret-123"',
             # "parola" is Turkish for passphrase: the rule deliberately
         # covers Turkish credential names, so the test must too.
         'parola = "Secret123"',
@@ -306,7 +306,7 @@ class TestMatcherBehaviour:
         sensitive = [VALID_VISA, VALID_TR_IBAN, VALID_TCKN, "jane@example.org"]
         line = f"2026-01-14,ACME,{VALID_VISA},{VALID_TR_IBAN},{VALID_TCKN},jane@university.edu"
 
-        findings = Matcher(config).scan_text(line, "musteriler.csv")
+        findings = Matcher(config).scan_text(line, "customers.csv")
         assert len(findings) >= 4
 
         for finding in findings:
@@ -387,7 +387,7 @@ class TestMatcherBehaviour:
         second = Matcher(config).scan_text(f"ID {VALID_TCKN}", "b.txt")[0]
         assert first.fingerprint == second.fingerprint
 
-        salted = Matcher(config.replace(fingerprint_salt="kurum-tuzu")).scan_text(
+        salted = Matcher(config.replace(fingerprint_salt="org-salt")).scan_text(
             f"ID {VALID_TCKN}", "a.txt"
         )[0]
         assert salted.fingerprint != first.fingerprint

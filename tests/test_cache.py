@@ -46,7 +46,7 @@ def touch_older(path, seconds: int = 10):
 class TestCacheHits:
     def test_second_scan_reads_nothing_and_finds_the_same(self, tree, tmp_path):
         target = tree({"a.txt": f"ID: {VALID_TCKN}\n", "b.txt": f"Card: {VALID_VISA}\n"})
-        cache = tmp_path / "onbellek.json"
+        cache = tmp_path / "scan-cache.json"
 
         first = run(target, cache)
         assert first.files_cached == 0
@@ -60,7 +60,7 @@ class TestCacheHits:
         ]
 
     def test_cached_findings_round_trip_completely(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         cache = tmp_path / "c.json"
 
         before = run(target, cache).findings[0]
@@ -88,7 +88,7 @@ class TestCacheHits:
 
         assert run(target, cache).findings == []
 
-        (target / "a.txt").write_bytes(f"TC: {VALID_TCKN}\n".encode())
+        (target / "a.txt").write_bytes(f"ID: {VALID_TCKN}\n".encode())
         second = run(target, cache)
         assert len(second.findings) == 1
         assert second.files_cached == 0
@@ -105,11 +105,11 @@ class TestCacheHits:
         assert len(second.findings) == 1
 
     def test_new_file_is_scanned_without_losing_the_cache(self, tree, tmp_path):
-        target = tree({"a.txt": "bir\n", "b.txt": "iki\n"})
+        target = tree({"a.txt": "one\n", "b.txt": "two\n"})
         cache = tmp_path / "c.json"
         run(target, cache)
 
-        (target / "c.txt").write_bytes(f"TC: {VALID_TCKN}\n".encode())
+        (target / "c.txt").write_bytes(f"ID: {VALID_TCKN}\n".encode())
         second = run(target, cache)
 
         assert second.files_cached == 2
@@ -130,7 +130,7 @@ class TestCacheHits:
 
 class TestInvalidation:
     def test_rule_or_setting_change_drops_the_whole_cache(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         cache = tmp_path / "c.json"
         run(target, cache)
 
@@ -140,7 +140,7 @@ class TestInvalidation:
         assert second.files_cached == 0
 
     def test_min_severity_change_drops_the_cache(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\nmail: a@b.com\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\nmail: a@b.com\n"})
         cache = tmp_path / "c.json"
         run(target, cache, min_severity=Severity.HIGH.value)
 
@@ -151,7 +151,7 @@ class TestInvalidation:
     def test_fingerprint_ignores_settings_that_cannot_change_results(self):
         base = ScanConfig(entropy_scan=False)
         assert config_fingerprint(base) == config_fingerprint(
-            base.replace(workers=7, executor="thread", target="/baska/yer")
+            base.replace(workers=7, executor="thread", target="/elsewhere")
         )
 
     def test_fingerprint_follows_settings_that_can(self):
@@ -160,7 +160,7 @@ class TestInvalidation:
             base.replace(entropy_threshold=3.0),
             base.replace(entropy_scan=not base.entropy_scan),
             base.replace(exclude_rules=("EMAIL",)),
-            base.replace(fingerprint_salt="tuz"),
+            base.replace(fingerprint_salt="salt"),
             base.replace(max_line_length=100),
         ):
             assert config_fingerprint(base) != config_fingerprint(changed)
@@ -193,7 +193,7 @@ class TestInvalidation:
         assert config_fingerprint(config) == before
 
     def test_missing_rules_directory_does_not_raise(self, tmp_path):
-        config = ScanConfig(yara_enabled=True, yara_rules_dir=str(tmp_path / "yok"))
+        config = ScanConfig(yara_enabled=True, yara_rules_dir=str(tmp_path / "missing"))
         assert config_fingerprint(config)
 
     def test_version_is_part_of_the_fingerprint(self, monkeypatch):
@@ -207,7 +207,7 @@ class TestInvalidation:
         assert config_fingerprint(config) != before
 
     def test_corrupt_cache_file_falls_back_to_full_scan(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         cache = tmp_path / "c.json"
         cache.write_text("{ this is not valid json", encoding="utf-8")
 
@@ -234,7 +234,7 @@ class TestInvalidation:
         cache = tmp_path / "c.json"
         config = make_config(cache)
         cache.write_text(
-            json.dumps({"schema": 1, "config_hash": "baska", "entries": {"/a": {}}}),
+            json.dumps({"schema": 1, "config_hash": "different", "entries": {"/a": {}}}),
             encoding="utf-8",
         )
         opened = ScanCache.open(str(cache), config)
@@ -244,10 +244,10 @@ class TestInvalidation:
 
 class TestSafety:
     def test_quarantine_disables_the_cache(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         cache = tmp_path / "c.json"
         config = make_config(
-            cache, quarantine=True, quarantine_dir=str(tmp_path / "kasa")
+            cache, quarantine=True, quarantine_dir=str(tmp_path / "vault")
         )
 
         scanner = Scanner(str(target), config=config)
@@ -260,14 +260,14 @@ class TestSafety:
         victim.write_bytes(b"content")
 
         cache.remember(
-            FileReport(path=str(victim), error="OSError: kilitli", findings=[])
+            FileReport(path=str(victim), error="OSError: locked", findings=[])
         )
         # A locked file must not become invisible forever.
         assert cache.entries == {}
 
     def test_cache_file_is_not_scanned(self, tree, tmp_path):
         # With the cache *inside* the target, it must not scan itself.
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         cache = target / ".sentinel-cache.json"
 
         run(target, cache)
@@ -278,7 +278,7 @@ class TestSafety:
         assert second.files_scanned == 1
 
     def test_baseline_still_suppresses_cached_findings(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         cache = tmp_path / "c.json"
         baseline = tmp_path / "baseline.txt"
 
@@ -320,7 +320,7 @@ class TestSafety:
         assert len(full.findings) == 1
 
     def test_disabled_by_default(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n"})
         scanner = Scanner(
             str(target),
             config=ScanConfig(entropy_scan=False, yara_enabled=False, executor="serial"),
@@ -349,7 +349,7 @@ class TestHousekeeping:
         assert cache.save() is False
 
     def test_stats_separate_stale_from_missing(self, tree, tmp_path):
-        target = tree({"a.txt": "bir\n", "b.txt": "iki\n"})
+        target = tree({"a.txt": "one\n", "b.txt": "two\n"})
         cache_path = tmp_path / "c.json"
         run(target, cache_path)
 

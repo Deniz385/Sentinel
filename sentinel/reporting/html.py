@@ -1,4 +1,4 @@
-"""HTML panosu (dashboard).
+"""The HTML dashboard.
 
 **Security defect fixed:** the v3.0 `reporter.py` wrote file paths and
 finding content straight into HTML with f-strings. A filename containing
@@ -540,7 +540,7 @@ details.errors li { word-break: break-all; }
 
 <div class="filters">
   <input type="search" id="q" placeholder="Search file, type or content…"
-         aria-label="Bulgularda ara">
+         aria-label="Search findings">
   <select id="sev" aria-label="Filter by severity">
     <option value="">All severities</option>
     {% for value in severity_order %}

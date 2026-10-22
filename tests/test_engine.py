@@ -21,11 +21,11 @@ from tests.conftest import INVALID_TCKN, VALID_TCKN, VALID_VISA
 def sample_tree(tree):
     return tree(
         {
-            "musteriler.txt": f"ID: {VALID_TCKN}\nHatali: {INVALID_TCKN}\n",
+            "customers.txt": f"ID: {VALID_TCKN}\nInvalid: {INVALID_TCKN}\n",
             "payments.csv": f"card,amount\n{VALID_VISA},100\n",
             "clean.txt": "No sensitive data here.\n",
             "sub/folder/notes.txt": "mail: jane.doe@university.edu\n",
-            "resim.bin": b"\x00\x01binary",
+            "image.bin": b"\x00\x01binary",
             "bos.txt": "",
         }
     )
@@ -87,7 +87,7 @@ class TestScanResults:
 
     def test_missing_target_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            run(tmp_path / "yok")
+            run(tmp_path / "missing")
 
 
 class TestHashing:
@@ -97,6 +97,14 @@ class TestHashing:
         path = tree({"a.txt": "content"}) / "a.txt"
         expected = hashlib.sha256(b"content").hexdigest()
         assert calculate_file_hash(str(path)) == expected
+
+    def test_unreadable_file_gets_a_marker_not_a_crash(self, tmp_path):
+        # The return value lands in the reports as the file's hash, so it
+        # has to be a readable marker rather than an exception or a
+        # digest of nothing. It was untested and spelled in Turkish.
+        marker = calculate_file_hash(str(tmp_path / "does-not-exist.txt"))
+        assert marker == "HASH_UNAVAILABLE"
+        assert marker.isascii()
 
     def test_hash_is_computed_once_per_file(self, tree, monkeypatch):
         """v3.0 rehashed for every finding (50 MB x 1000 findings)."""
@@ -130,7 +138,7 @@ class TestHashing:
 
     def test_all_findings_share_the_file_hash(self, tree):
         path = (
-            tree({"a.txt": f"ID: {VALID_TCKN}\nKart: {VALID_VISA}\n"}) / "a.txt"
+            tree({"a.txt": f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\n"}) / "a.txt"
         )
         result = run(path)
         hashes = {f.sha256 for f in result.findings}
@@ -143,7 +151,7 @@ class TestTargetSelection:
         root = tree(
             {
                 "a.txt": f"ID: {VALID_TCKN}",
-                "node_modules/paket/b.txt": f"ID: {VALID_TCKN}",
+                "node_modules/package/b.txt": f"ID: {VALID_TCKN}",
                 ".git/config": f"ID: {VALID_TCKN}",
             }
         )
@@ -172,8 +180,8 @@ class TestTargetSelection:
         assert all("tests" not in f.file for f in result.findings), pattern
 
     def test_exclude_prunes_directories(self, tree):
-        root = tree({"derin/cok/derin/a.txt": f"ID: {VALID_TCKN}"})
-        result = run(root, exclude_globs=("derin/**",))
+        root = tree({"deep/very/deep/a.txt": f"ID: {VALID_TCKN}"})
+        result = run(root, exclude_globs=("deep/**",))
         assert result.findings == []
 
     def test_extension_filter(self, tree):
@@ -182,7 +190,7 @@ class TestTargetSelection:
         assert all(f.file.endswith(".txt") for f in result.findings)
 
     def test_max_file_size(self, tree):
-        root = tree({"buyuk.txt": f"ID: {VALID_TCKN}" + "x" * 5000})
+        root = tree({"large.txt": f"ID: {VALID_TCKN}" + "x" * 5000})
         result = run(root, max_file_size=100)
         assert result.findings == []
         assert result.files_skipped == 1
@@ -257,7 +265,7 @@ class TestExecutionModes:
     def test_all_modes_agree(self, tree, mode):
         """Parallel and serial results must match, or there is a race."""
         files = {
-            f"f{i}.txt": f"ID: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(12)
+            f"f{i}.txt": f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\n" for i in range(12)
         }
         root = tree(files)
 

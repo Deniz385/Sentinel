@@ -461,7 +461,7 @@ class SentinelPro(ctk.CTk):
             )
             result = self.current_scanner.scan(progress=self._on_progress)
             self.after(0, self._finish, result, None)
-        except Exception as exc:  # pragma: no cover - GUI hata yolu
+        except Exception as exc:  # pragma: no cover - the GUI error path
             self.after(0, self._finish, None, exc)
 
     def _on_progress(self, done: int, total: int, path: str):
@@ -672,7 +672,7 @@ class SentinelPro(ctk.CTk):
         extensions = {"html": ".html", "pdf": ".pdf", "csv": ".csv", "sarif": ".sarif"}
         path = filedialog.asksaveasfilename(
             defaultextension=extensions[fmt],
-            initialfile=f"sentinel_raporu{extensions[fmt]}",
+            initialfile=f"sentinel_report{extensions[fmt]}",
             filetypes=[(f"{fmt.upper()} file", f"*{extensions[fmt]}")],
         )
         if not path:

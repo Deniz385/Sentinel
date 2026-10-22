@@ -1,4 +1,4 @@
-"""YARA motoru testleri.
+"""YARA engine tests.
 
 In v3.0 `rules/sample.yar` sat in the repository but no code ever
 read it. These tests verify that the rules are genuinely compiled
@@ -34,12 +34,12 @@ class TestGracefulDegradation:
             assert engine.error
 
     def test_disabled_engine_returns_no_findings(self, tmp_path):
-        engine = YaraEngine(str(tmp_path / "olmayan-dizin"))
+        engine = YaraEngine(str(tmp_path / "missing-dir"))
         assert not engine.enabled
         assert engine.match_file(__file__) == []
 
     def test_missing_directory_is_reported_not_raised(self, tmp_path):
-        engine = YaraEngine(str(tmp_path / "yok"))
+        engine = YaraEngine(str(tmp_path / "missing"))
         assert engine.error
 
     def test_empty_directory_is_reported(self, tmp_path):
@@ -65,7 +65,7 @@ class TestGracefulDegradation:
         (tmp_path / "a.txt").write_text("mail: jane@university.edu\n", encoding="utf-8")
         config = ScanConfig(
             yara_enabled=True,
-            yara_rules_dir=str(tmp_path / "olmayan"),
+            yara_rules_dir=str(tmp_path / "missing"),
             entropy_scan=False,
             workers=1,
             executor="serial",

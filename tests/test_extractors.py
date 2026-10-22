@@ -100,7 +100,7 @@ class TestArchive:
 
     def test_reads_zip_members(self, tmp_path, config):
         path = self._make_zip(
-            tmp_path / "a.zip", {"secret_notes.txt": f"TC: {VALID_TCKN}"}
+            tmp_path / "a.zip", {"secret_notes.txt": f"ID: {VALID_TCKN}"}
         )
         chunks = list(extract(str(path), config))
         assert chunks
@@ -114,14 +114,14 @@ class TestArchive:
     def test_nested_zip_within_depth(self, tmp_path, config):
         inner = io.BytesIO()
         with zipfile.ZipFile(inner, "w") as archive:
-            archive.writestr("ic.txt", f"TC: {VALID_TCKN}")
+            archive.writestr("ic.txt", f"ID: {VALID_TCKN}")
         path = self._make_zip(tmp_path / "a.zip", {"ic.zip": inner.getvalue()})
         assert VALID_TCKN in text_of(path, config)
 
     def test_depth_limit_stops_recursion(self, tmp_path, config):
         inner = io.BytesIO()
         with zipfile.ZipFile(inner, "w") as archive:
-            archive.writestr("ic.txt", f"TC: {VALID_TCKN}")
+            archive.writestr("ic.txt", f"ID: {VALID_TCKN}")
         path = self._make_zip(tmp_path / "a.zip", {"ic.zip": inner.getvalue()})
         shallow = config.replace(archive_max_depth=1)
         assert VALID_TCKN not in text_of(path, shallow)
@@ -150,7 +150,7 @@ class TestArchive:
         assert any("good.txt" in source for source in sources)
 
     def test_archives_can_be_disabled(self, tmp_path, config):
-        path = self._make_zip(tmp_path / "a.zip", {"x.txt": f"TC: {VALID_TCKN}"})
+        path = self._make_zip(tmp_path / "a.zip", {"x.txt": f"ID: {VALID_TCKN}"})
         assert list(extract(str(path), config.replace(archive_enabled=False))) == []
 
     def test_corrupt_zip_does_not_raise(self, tmp_path, config):
@@ -177,10 +177,10 @@ class TestOffice:
     def test_xlsx_all_sheets(self, tmp_path, config):
         openpyxl = pytest.importorskip("openpyxl")
         workbook = openpyxl.Workbook()
-        workbook.active.title = "Musteriler"
+        workbook.active.title = "Customers"
         workbook.active["A1"] = "TC"
         workbook.active["B1"] = VALID_TCKN
-        second = workbook.create_sheet("Odemeler")
+        second = workbook.create_sheet("Payments")
         second["A1"] = VALID_VISA
         path = tmp_path / "a.xlsx"
         workbook.save(str(path))
@@ -190,13 +190,13 @@ class TestOffice:
         assert VALID_TCKN in combined
         assert VALID_VISA in combined
         # The page name must appear in the source path.
-        assert any("Musteriler" in chunk.source for chunk in chunks)
+        assert any("Customers" in chunk.source for chunk in chunks)
 
     def test_pptx_slides_and_notes(self, tmp_path, config):
         pptx = pytest.importorskip("pptx")
         presentation = pptx.Presentation()
         slide = presentation.slides.add_slide(presentation.slide_layouts[5])
-        slide.shapes.title.text = f"TC: {VALID_TCKN}"
+        slide.shapes.title.text = f"ID: {VALID_TCKN}"
         path = tmp_path / "a.pptx"
         presentation.save(str(path))
         assert VALID_TCKN in text_of(path, config)

@@ -152,7 +152,7 @@ def calculate_file_hash(path: str, block_size: int = 1 << 20) -> str:
                 digest.update(block)
         return digest.hexdigest()
     except OSError:
-        return "HASH_HESAPLANAMADI"
+        return "HASH_UNAVAILABLE"
 
 
 def scan_single_file(path: str, config: ScanConfig) -> FileReport:

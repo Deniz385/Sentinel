@@ -27,7 +27,7 @@ class TestEntropy:
 
     def test_random_beats_prose(self):
         random_token = "Zx9Kq2mWpL7vR4tY8nB3cF6hJ1sD5gA0"
-        prose = "bu bir normal turkce cumledir"
+        prose = "this is an ordinary english sentence"
         assert shannon_entropy(random_token) > shannon_entropy(prose)
 
     def test_normalized_is_bounded(self):
@@ -41,7 +41,7 @@ class TestEntropy:
         "token",
         [
             "short",  # too short
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaa",  # tek karakter
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaa",  # a single character
             "12345678901234567890123456",  # digits only
             "my_long_snake_case_identifier",  # an identifier
             "0123456789abcdef0123456789abcdef",  # md5 - a checksum, not a secret
@@ -142,8 +142,8 @@ class TestRedaction:
         assert fingerprint("abc") != fingerprint("abd")
 
     def test_salt_changes_fingerprint(self):
-        assert fingerprint("abc", "tuz1") != fingerprint("abc", "tuz2")
-        assert fingerprint("abc", "tuz1") != fingerprint("abc")
+        assert fingerprint("abc", "salt1") != fingerprint("abc", "salt2")
+        assert fingerprint("abc", "salt1") != fingerprint("abc")
 
     def test_fingerprint_does_not_contain_the_value(self):
         secret = "AKIAIOSFODNN7EXAMPLX"
@@ -217,16 +217,16 @@ class TestAllowlist:
 
     def test_bare_directory_name(self):
         allowlist = Allowlist(paths=("test_data",))
-        assert allowlist.allows_path("proje/test_data/leak.txt")
+        assert allowlist.allows_path("project/test_data/leak.txt")
 
     def test_value_literal(self):
-        allowlist = Allowlist(values=("sahte-anahtar",), use_defaults=False)
-        assert allowlist.allows_value("sahte-anahtar")
-        assert not allowlist.allows_value("gercek-anahtar")
+        allowlist = Allowlist(values=("fake-key",), use_defaults=False)
+        assert allowlist.allows_value("fake-key")
+        assert not allowlist.allows_value("real-key")
 
     def test_fingerprint(self):
         allowlist = Allowlist(fingerprints=("ABC123",), use_defaults=False)
-        assert allowlist.allows_value("herhangi", "abc123")
+        assert allowlist.allows_value("anything", "abc123")
 
     def test_regex(self):
         allowlist = Allowlist(patterns=(r"^TEST_",), use_defaults=False)
@@ -262,7 +262,7 @@ class TestAllowlist:
         import pickle
 
         original = Allowlist(patterns=(r"^TEST_",), use_defaults=False)
-        assert original.allows_value("TEST_X")  # derlemeyi tetikle
+        assert original.allows_value("TEST_X")  # trigger the compile
         restored = pickle.loads(pickle.dumps(original))
         assert restored.allows_value("TEST_X")
 
@@ -278,4 +278,4 @@ class TestBaseline:
         assert load_baseline(str(path)) == {"aa11", "bb22"}
 
     def test_missing_file_is_empty(self, tmp_path):
-        assert load_baseline(str(tmp_path / "yok.json")) == set()
+        assert load_baseline(str(tmp_path / "missing.json")) == set()

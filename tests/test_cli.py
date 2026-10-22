@@ -21,7 +21,7 @@ from tests.conftest import VALID_TCKN, VALID_VISA
 def project(tmp_path, monkeypatch):
     """A temporary project containing one leak; cwd is moved into it."""
     (tmp_path / "customers.txt").write_text(
-        f"ID: {VALID_TCKN}\nKart: {VALID_VISA}\n", encoding="utf-8"
+        f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\n", encoding="utf-8"
     )
     (tmp_path / "clean.txt").write_text("no sensitive data here\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -73,16 +73,16 @@ class TestScanCommand:
         assert code == EXIT_OK
 
     def test_missing_target_exits_error(self, project, capsys):
-        code = main(["scan", "yok-boyle-bir-sey", "--no-report"])
+        code = main(["scan", "no-such-path-exists", "--no-report"])
         assert code == EXIT_ERROR
         assert "ERROR" in capsys.readouterr().err
 
     def test_invalid_severity_exits_error(self, project, capsys):
-        code = main(["scan", ".", "--no-report", "--min-severity", "cok-yuksek"])
+        code = main(["scan", ".", "--no-report", "--min-severity", "very-high"])
         assert code == EXIT_ERROR
 
     def test_writes_requested_formats(self, project):
-        out = project / "raporlar"
+        out = project / "reports"
         code = main(
             [
                 "scan", ".", "--output", str(out),
@@ -95,6 +95,25 @@ class TestScanCommand:
             "sentinel.sarif", "scan_report.md",
         ):
             assert (out / name).is_file(), name
+
+    def test_failed_report_is_not_announced_as_written(self, project, capsys, monkeypatch):
+        # write_reports returns "ERROR: ..." in place of a path when a
+        # writer raises. The CLI has to recognise that string: if it does
+        # not, a failed report is printed with a tick next to it and the
+        # user believes a report exists that was never written.
+        from sentinel.reporting import html
+
+        def explode(result, path):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(html, "write", explode)
+        code = main(["scan", ".", "--output", str(project / "r"), "--format", "html"])
+
+        out = capsys.readouterr().out
+        assert code == EXIT_OK
+        assert "ERROR" in out
+        assert "✓ html" not in out
+        assert not (project / "r" / "dashboard.html").exists()
 
     def test_no_report_writes_nothing(self, project):
         main(["scan", ".", "--no-report", "--quiet"])
@@ -212,17 +231,17 @@ class TestDoctorCommand:
 
 class TestVaultCommand:
     def test_empty_vault(self, project, capsys):
-        code = main(["vault", "list", "--dir", str(project / "kasa")])
+        code = main(["vault", "list", "--dir", str(project / "vault")])
         assert code == EXIT_OK
         assert "empty" in capsys.readouterr().out
 
     def test_purge_requires_a_target(self, project, capsys):
-        code = main(["vault", "purge", "--dir", str(project / "kasa")])
+        code = main(["vault", "purge", "--dir", str(project / "vault")])
         assert code == EXIT_ERROR
         assert "--all" in capsys.readouterr().err
 
     def test_restore_requires_a_name(self, project):
-        code = main(["vault", "restore", "--dir", str(project / "kasa")])
+        code = main(["vault", "restore", "--dir", str(project / "vault")])
         assert code == EXIT_ERROR
 
     def test_list_after_quarantine(self, project, capsys, monkeypatch):
@@ -232,7 +251,7 @@ class TestVaultCommand:
         monkeypatch.setenv(
             "SENTINEL_VAULT_KEY", base64.b64encode(os.urandom(32)).decode("ascii")
         )
-        vault_dir = project / "kasa"
+        vault_dir = project / "vault"
         main(["scan", "customers.txt", "--no-report", "--quiet", "--quarantine"])
         # The default vault directory is KARANTINA_BOLGESI.
         code = main(["vault", "list"])
@@ -272,7 +291,7 @@ class TestPrecommitCommand:
             git("config", "user.email", "t@t.local")
             git("config", "user.name", "T")
         except (OSError, subprocess.CalledProcessError):
-            pytest.skip("git yok")
+            pytest.skip("git is not available")
 
         git("add", "customers.txt")
         code = main(["precommit", "--fail-on", "high"])
@@ -293,7 +312,7 @@ class TestPrecommitCommand:
             git("config", "user.email", "t@t.local")
             git("config", "user.name", "T")
         except (OSError, subprocess.CalledProcessError):
-            pytest.skip("git yok")
+            pytest.skip("git is not available")
 
         git("add", "clean.txt")
         assert main(["precommit", "--fail-on", "high"]) == EXIT_OK
@@ -317,7 +336,7 @@ class TestConfig:
 
     def test_rejects_bad_severity(self):
         with pytest.raises(ValueError):
-            ScanConfig(min_severity="felaket")
+            ScanConfig(min_severity="catastrophic")
 
     def test_yaml_roundtrip(self, tmp_path):
         pytest.importorskip("yaml")
@@ -361,20 +380,20 @@ class TestConfig:
         config = ScanConfig().with_env(
             {
                 "SENTINEL_WEBHOOK_URL": "https://example.invalid/hook",
-                "SENTINEL_FINGERPRINT_SALT": "kurum-tuzu",
+                "SENTINEL_FINGERPRINT_SALT": "org-salt",
                 "SENTINEL_WORKERS": "6",
                 "SENTINEL_OCR": "true",
                 "SENTINEL_MIN_SEVERITY": "high",
             }
         )
         assert config.webhook_url == "https://example.invalid/hook"
-        assert config.fingerprint_salt == "kurum-tuzu"
+        assert config.fingerprint_salt == "org-salt"
         assert config.workers == 6
         assert config.ocr is True
         assert config.min_severity == "high"
 
     def test_env_ignores_garbage_numbers(self):
-        config = ScanConfig().with_env({"SENTINEL_WORKERS": "cok"})
+        config = ScanConfig().with_env({"SENTINEL_WORKERS": "not-a-number"})
         assert config.workers == 0
 
     def test_cli_overrides_file(self, tmp_path, monkeypatch):

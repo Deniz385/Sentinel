@@ -74,7 +74,6 @@ jobs:
         # A security tool has to start and scan text even when none of
         # its optional dependencies are present.
         run: |
-          python -m venv /tmp/cekirdek || python -m venv $RUNNER_TEMP/cekirdek
           python - <<'PY'
           import os, subprocess, sys, venv, tempfile
           base = tempfile.mkdtemp()

@@ -178,4 +178,4 @@ def extract_pptx(path: str, config):
             if notes and notes.strip():
                 lines.append(notes)
         if lines:
-            yield TextChunk("\n".join(lines), f"{path}::slayt-{index}", 0, path)
+            yield TextChunk("\n".join(lines), f"{path}::slide-{index}", 0, path)

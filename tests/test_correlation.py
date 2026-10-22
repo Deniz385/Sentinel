@@ -133,7 +133,7 @@ class TestResultIntegration:
     def test_copied_secrets_collapse_to_unique_count(self, tree):
         # The same two values copied into five files: 10 findings, 2 secrets.
         files = {
-            f"kopya{i}.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(5)
+            f"copy{i}.txt": f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\n" for i in range(5)
         }
         result = run(tree(files))
 
@@ -144,7 +144,7 @@ class TestResultIntegration:
         assert all(group.file_count == 5 for group in shared)
 
     def test_summary_reports_both_numbers(self, tree):
-        files = {f"k{i}.txt": f"TC: {VALID_TCKN}\n" for i in range(3)}
+        files = {f"k{i}.txt": f"ID: {VALID_TCKN}\n" for i in range(3)}
         summary = run(tree(files)).summary()
         assert summary["findings"] == 3
         assert summary["unique_secrets"] == 1
@@ -152,12 +152,12 @@ class TestResultIntegration:
 
     def test_unique_secrets_never_exceeds_findings(self, tree):
         result = run(
-            tree({"a.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n"}),
+            tree({"a.txt": f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\n"}),
         )
         assert result.unique_count <= len(result.findings)
 
     def test_groups_are_memoised_but_follow_new_findings(self, tree):
-        result = run(tree({"a.txt": f"TC: {VALID_TCKN}\n"}))
+        result = run(tree({"a.txt": f"ID: {VALID_TCKN}\n"}))
         first = result.groups()
         assert result.groups() is first  # same object: no regrouping
 
@@ -169,7 +169,7 @@ class TestNoDisclosure:
     """Correlation must not break masking."""
 
     def test_group_output_carries_no_clear_value(self, tree):
-        files = {f"k{i}.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(3)}
+        files = {f"k{i}.txt": f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\n" for i in range(3)}
         result = run(tree(files))
 
         blob = json.dumps(
@@ -197,7 +197,7 @@ class TestReportWiring:
     def test_markdown_lists_shared_secrets(self, tree, tmp_path):
         from sentinel.reporting import markdown
 
-        files = {f"k{i}.txt": f"TC: {VALID_TCKN}\n" for i in range(4)}
+        files = {f"k{i}.txt": f"ID: {VALID_TCKN}\n" for i in range(4)}
         text = markdown.render(run(tree(files)))
 
         assert "unique secrets" in text
@@ -207,7 +207,7 @@ class TestReportWiring:
     def test_markdown_omits_section_when_nothing_is_shared(self, tree):
         from sentinel.reporting import markdown
 
-        text = markdown.render(run(tree({"a.txt": f"TC: {VALID_TCKN}\n"})))
+        text = markdown.render(run(tree({"a.txt": f"ID: {VALID_TCKN}\n"})))
         assert "Secrets copied into more than one file" not in text
 
     def test_html_shows_unique_tile_and_spread_table(self, tree):

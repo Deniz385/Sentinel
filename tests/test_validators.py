@@ -40,15 +40,15 @@ class TestTckn:
         assert validate_tckn(VALID_TCKN)
 
     def test_invalid_checksum(self):
-        # 11 hane ve regex'e uyar, ama kontrol haneleri tutmaz.
+        # 11 digits and matches the regex, but the check digits do not hold.
         assert not validate_tckn(INVALID_TCKN)
 
     @pytest.mark.parametrize(
         "value",
         [
             "0123456789 0".replace(" ", ""),  # starts with 0
-            "1234567890",  # 10 hane
-            "123456789012",  # 12 hane
+            "1234567890",  # 10 digits
+            "123456789012",  # 12 digits
             "1000000014a",  # contains a letter
             "",
             "11111111110",  # passes the algorithm but every digit is the same
@@ -81,7 +81,7 @@ class TestCreditCard:
         assert not validate_credit_card(candidate)
 
     def test_rejects_wrong_length(self):
-        assert not validate_credit_card("411111111111")  # 12 hane
+        assert not validate_credit_card("411111111111")  # 12 digits
         assert not validate_credit_card("4" * 20)
 
     def test_brand_detection(self):
@@ -114,7 +114,7 @@ class TestIban:
 
 class TestJwt:
     def test_valid_structure(self):
-        # {"alg":"HS256","typ":"JWT"} . {"sub":"1"} . imza
+        # {"alg":"HS256","typ":"JWT"} . {"sub":"1"} . signature
         token = (
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
             ".eyJzdWIiOiIxMjM0NTY3ODkwIn0"
@@ -144,7 +144,7 @@ class TestBase58Check:
         assert not validate_base58check(tampered)
 
     def test_rejects_invalid_alphabet(self):
-        assert not validate_base58check("1A1zP1eP5QGefi2DMPTfTL5SLmv7Div0Na")  # '0' yok
+        assert not validate_base58check("1A1zP1eP5QGefi2DMPTfTL5SLmv7Div0Na")  # contains no '0'
 
 
 class TestEmail:
@@ -160,7 +160,7 @@ class TestEmail:
             "deniz.celik@",
             "deniz@.com",
             "@gmail.com",
-            "iki@at@var.com",
+            "two@at@signs.com",
             "user@example.com",  # RFC 2606: reserved, not a real address
             "admin@localhost",
         ],
