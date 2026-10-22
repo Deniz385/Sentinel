@@ -29,6 +29,9 @@ def _read(path: str) -> bytes:
 
 
 def _write(path: str, data: bytes):
+    # The vault directory is created on first write, so a test planting a
+    # pre-existing v3.0 file has to create it the way an old install did.
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as handle:
         handle.write(data)
 
@@ -220,6 +223,38 @@ class TestRestoreSafety:
         assert ok
         ok, _ = vault.restore_file(os.path.basename(enc_path))
         assert ok
+
+
+class TestSideEffectsOnConstruction:
+    """Building a manager must not touch the filesystem."""
+
+    def test_constructing_creates_no_directory(self, tmp_path):
+        # The GUI builds a manager at startup whether or not quarantine
+        # is ever used. It used to leave an empty vault folder in
+        # whatever directory the user launched from.
+        target = tmp_path / "vault"
+        QuarantineManager(str(target))
+        assert not target.exists()
+
+    def test_listing_a_missing_vault_is_empty_not_an_error(self, tmp_path):
+        manager = QuarantineManager(str(tmp_path / "vault"))
+        assert manager.list_items() == []
+        assert manager.purge() == 0
+        assert not (tmp_path / "vault").exists()
+
+    def test_first_quarantine_creates_the_directory(self, vault, victim):
+        assert not os.path.exists(vault.q_dir)
+        ok, _ = vault.quarantine_file(str(victim))
+        assert ok
+        assert os.path.isdir(vault.q_dir)
+
+    def test_default_directory_name_is_english(self):
+        from sentinel.config import ScanConfig
+
+        assert QuarantineManager.__init__.__defaults__[0] == "QUARANTINE_ZONE"
+        assert ScanConfig().quarantine_dir == "QUARANTINE_ZONE"
+        # The old name stays readable for vaults already on disk.
+        assert "KARANTINA_BOLGESI" in QuarantineManager.LEGACY_DIRS
 
 
 class TestLegacyCompatibility:

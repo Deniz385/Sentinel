@@ -251,14 +251,17 @@ class TestVaultCommand:
         monkeypatch.setenv(
             "SENTINEL_VAULT_KEY", base64.b64encode(os.urandom(32)).decode("ascii")
         )
-        vault_dir = project / "vault"
         main(["scan", "customers.txt", "--no-report", "--quiet", "--quarantine"])
-        # The default vault directory is KARANTINA_BOLGESI.
+        # `vault list` without --dir must look in the same directory the
+        # scan wrote to. Each having its own copy of the default let them
+        # drift: the scan filled one vault while `list` reported another
+        # one empty.
         code = main(["vault", "list"])
         assert code == EXIT_OK
         assert not (project / "customers.txt").exists()
-        assert ".enc" in capsys.readouterr().out
-        del vault_dir
+        out = capsys.readouterr().out
+        assert ".enc" in out
+        assert "Vault is empty" not in out
 
 
 class TestPrecommitCommand:

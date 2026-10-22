@@ -90,7 +90,7 @@ class ScanConfig:
 
     # --- actions ---
     quarantine: bool = False
-    quarantine_dir: str = "KARANTINA_BOLGESI"
+    quarantine_dir: str = "QUARANTINE_ZONE"
     quarantine_min_severity: str = Severity.HIGH.value
     shred_original: bool = False
 

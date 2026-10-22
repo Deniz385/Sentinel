@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Action to perform",
     )
     vault.add_argument("name", nargs="?", help="Vault file name (for restore/purge)")
-    vault.add_argument("--dir", default="KARANTINA_BOLGESI", help="Vault directory")
+    vault.add_argument("--dir", default=None, help="Vault directory")
     vault.add_argument("--to", help="Destination path to restore to")
     vault.add_argument("--force", action="store_true", help="Overwrite the destination")
     vault.add_argument("--all", action="store_true", help="Empty the whole vault (purge)")
@@ -584,7 +584,12 @@ def cmd_watch(args, style: _Style) -> int:
 def cmd_vault(args, style: _Style) -> int:
     from sentinel.quarantine import QuarantineManager, migrate_legacy_dirs
 
-    manager = QuarantineManager(args.dir)
+    # Without --dir, use the configured directory - the same one `scan
+    # --quarantine` writes to. Repeating the default here once let the
+    # two drift apart, so `vault list` reported an empty vault while the
+    # files sat in another directory.
+    vault_dir = args.dir or _load_config(args).quarantine_dir
+    manager = QuarantineManager(vault_dir)
 
     if args.action == "list":
         items = manager.list_items()

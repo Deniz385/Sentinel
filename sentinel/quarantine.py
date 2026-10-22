@@ -114,12 +114,22 @@ class QuarantineManager:
     #: Directory names used by v3.0 and intermediate versions.
     LEGACY_DIRS = ("KARANTINA_BOLGESI", "QUARANTINE_ZONE")
 
-    def __init__(self, quarantine_dir: str = "KARANTINA_BOLGESI", key_path: str | None = None):
+    def __init__(self, quarantine_dir: str = "QUARANTINE_ZONE", key_path: str | None = None):
         self.q_dir = os.path.abspath(quarantine_dir)
         self.log_file = os.path.join(self.q_dir, _MANIFEST_NAME)
         self.legacy_log_file = os.path.join(self.q_dir, _LEGACY_MANIFEST)
         self._key_path = key_path
         self._key: bytes | None = None
+
+    def _ensure_dir(self) -> None:
+        """Create the vault directory, but only when about to write.
+
+        Constructing a manager must not leave a directory behind: the
+        GUI builds one at startup whether or not quarantine is ever
+        used, and an empty vault folder appearing in whatever directory
+        the user happened to launch from is both confusing and, for a
+        tool that encrypts and deletes files, alarming.
+        """
         os.makedirs(self.q_dir, exist_ok=True)
 
     # -- key ----------------------------------------------------------------
@@ -163,6 +173,11 @@ class QuarantineManager:
         return logs
 
     def _save_logs(self, data: dict):
+        if not data and not os.path.isfile(self.log_file):
+            # Nothing to record and no manifest to update: writing here
+            # would create the vault directory for no reason.
+            return
+        self._ensure_dir()
         temp = f"{self.log_file}.tmp"
         with open(temp, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2, ensure_ascii=False)
@@ -172,7 +187,13 @@ class QuarantineManager:
         """List the files in the vault together with their manifest data."""
         logs = self._get_logs()
         items = []
-        for name in sorted(os.listdir(self.q_dir)):
+        try:
+            names = sorted(os.listdir(self.q_dir))
+        except OSError:
+            # The vault is created on first write, so until then there is
+            # simply nothing in it. That is an empty list, not an error.
+            return items
+        for name in names:
             if not name.endswith(".enc"):
                 continue
             path = os.path.join(self.q_dir, name)
@@ -272,6 +293,8 @@ class QuarantineManager:
         """
         if not os.path.isfile(filepath):
             return False, f"File not found: {filepath}"
+
+        self._ensure_dir()
 
         try:
             with open(filepath, "rb") as handle:

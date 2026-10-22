@@ -5,7 +5,7 @@ For pulling a single file back out of the vault without opening the
 GUI. With Tkinter available it shows a file picker; otherwise it takes
 a command-line argument:
 
-    python restore_tool.py KARANTINA_BOLGESI/<time>_<digest>_data.txt.enc
+    python restore_tool.py QUARANTINE_ZONE/<time>_<digest>_data.txt.enc
 
 The `sentinel vault restore <name>` command does the same thing.
 """
