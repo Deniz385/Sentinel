@@ -1,13 +1,13 @@
-"""Yanlış pozitif (false positive) yönetimi.
+"""False-positive management.
 
-Bir DLP aracının kullanılıp kullanılmayacağını belirleyen asıl özellik bu:
-ekip, test verisi yüzünden her taramada aynı 40 bulguyu görmeye devam
-ederse aracı kapatır. Üç bastırma yolu sunulur:
+This is what decides whether a DLP tool gets used at all: if a team
+keeps seeing the same 40 findings from test data on every scan, they
+turn the tool off. Three ways to suppress are offered:
 
-1. **Yapılandırma**: yol glob'ları, birebir değerler, parmak izleri, regex.
-2. **Satır içi**: ilgili satırda ``sentinel:ignore`` yorumu.
-3. **Baz çizgisi (baseline)**: mevcut bulgular dondurulur, sadece yeni
-   olanlar raporlanır (`sentinel scan --baseline`).
+1. **Configuration**: path globs, exact values, fingerprints, regexes.
+2. **Inline**: a ``sentinel:ignore`` comment on the line itself.
+3. **Baseline**: freeze the current findings and report only new ones
+   (`sentinel scan --baseline`).
 """
 
 from __future__ import annotations
@@ -25,19 +25,19 @@ __all__ = [
     "path_matches",
 ]
 
-#: Satırda bu işaret varsa o satırdaki bulgular bastırılır.
-#: ``sentinel:ignore`` (tümü) veya ``sentinel:ignore=TC_KIMLIK,EMAIL``
+#: When this marker is on a line, findings on that line are suppressed.
+#: ``sentinel:ignore`` (all) or ``sentinel:ignore=TR_NATIONAL_ID,EMAIL``
 INLINE_IGNORE_RE = re.compile(
     r"sentinel\s*:\s*ignore(?:\s*[=:]\s*([A-Za-z0-9_, \-]+))?", re.IGNORECASE
 )
 
-#: Belgelerde/örneklerde geçen, kesin olarak gerçek olmayan değerler.
+#: Values from documentation and examples that are definitely not real.
 DEFAULT_ALLOWED_VALUES = frozenset(
     {
-        # AWS resmî dokümantasyon örnekleri
+        # Examples from the official AWS documentation
         "AKIAIOSFODNN7EXAMPLE",
         "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        # Yaygın şablon/doldurma değerleri
+        # Common placeholder and filler values
         "changeme",
         "CHANGEME",
         "your_api_key_here",
@@ -47,11 +47,11 @@ DEFAULT_ALLOWED_VALUES = frozenset(
         "example",
         "password",
         "secret",
-        "SENIN_WEBHOOK_URL_ADRESIN_BURAYA",
+        "YOUR_WEBHOOK_URL_HERE",
     }
 )
 
-#: RFC 2606 / 6761 ile ayrılmış, gerçek trafik taşımayan alan adları.
+#: Domains reserved by RFC 2606 / 6761 that carry no real traffic.
 _RESERVED_DOMAINS = (
     "@example.com",
     "@example.org",
@@ -64,7 +64,7 @@ _RESERVED_DOMAINS = (
 
 @dataclass
 class Allowlist:
-    """Bastırma kuralları. Alt süreçlere gönderilebilmesi için picklable."""
+    """Suppression rules. Picklable, so it can be sent to worker processes."""
 
     paths: tuple[str, ...] = ()
     values: tuple[str, ...] = ()
@@ -80,9 +80,14 @@ class Allowlist:
         self.values = tuple(self.values)
         self.fingerprints = tuple(str(f).lower() for f in self.fingerprints)
         self.patterns = tuple(self.patterns)
-        self.rules = tuple(r.upper() for r in self.rules)
+        # Resolve aliases so an allowlist written against the former
+        # Turkish rule names (``TC_KIMLIK``) still suppresses the renamed
+        # rule (``TR_NATIONAL_ID``).
+        from sentinel.patterns import resolve_name
 
-    # -- kurulum ----------------------------------------------------------
+        self.rules = tuple(resolve_name(r) for r in self.rules)
+
+    # -- construction -----------------------------------------------------
     @classmethod
     def from_dict(cls, data: dict | None) -> Allowlist:
         data = data or {}
@@ -98,7 +103,7 @@ class Allowlist:
 
     def _regexes(self):
         if not self._compiled and self.patterns:
-            # Derlemeyi tembel yap: pickle sırasında regex nesnesi taşınmaz.
+            # Compile lazily: a compiled regex is not carried through pickle.
             self._compiled = [re.compile(p) for p in self.patterns]
         return self._compiled
 
@@ -107,13 +112,15 @@ class Allowlist:
         state["_compiled"] = []
         return state
 
-    # -- sorgular ---------------------------------------------------------
+    # -- queries ----------------------------------------------------------
     def allows_path(self, path: str) -> bool:
-        """Dosya yolu tamamen taramadan muaf mı?"""
+        """Is this file path exempt from scanning entirely?"""
         return path_matches(path, self.paths)
 
     def allows_rule(self, rule: str) -> bool:
-        return rule.upper() in self.rules
+        from sentinel.patterns import resolve_name
+
+        return resolve_name(rule) in self.rules
 
     def allows_value(self, value: str, fingerprint: str = "") -> bool:
         if fingerprint and fingerprint.lower() in self.fingerprints:
@@ -129,7 +136,7 @@ class Allowlist:
         return any(regex.search(value) for regex in self._regexes())
 
     def inline_suppressed(self, line: str, rule: str) -> bool:
-        """Satırda ``sentinel:ignore`` işareti var mı?"""
+        """Does the line carry a ``sentinel:ignore`` marker?"""
         if not self.inline or not line:
             return False
         match = INLINE_IGNORE_RE.search(line)
@@ -138,21 +145,23 @@ class Allowlist:
         scoped = match.group(1)
         if not scoped:
             return True
-        wanted = {r.strip().upper() for r in scoped.split(",") if r.strip()}
-        return rule.upper() in wanted
+        from sentinel.patterns import resolve_name
+
+        wanted = {resolve_name(r) for r in scoped.split(",") if r.strip()}
+        return resolve_name(rule) in wanted
 
 
 def path_matches(path: str, patterns) -> bool:
-    """Yol, kalıplardan birine uyuyor mu?
+    """Does the path match any of the patterns?
 
-    Kullanıcılar kalıpları depo köküne göre yazar (``tests/*``), ama
-    taranan yol mutlak ya da ``./`` önekli olabilir. Düz `fnmatch` bu
-    durumda **sessizce hiçbir şey yapmaz** — kullanıcı dosyaları dışladığını
-    sanırken taranmaya devam ederler. Bu yüzden her kalıp yolun herhangi
-    bir yerine de demirlenerek denenir.
+    Users write patterns relative to the repository root (``tests/*``),
+    but the scanned path may be absolute or prefixed with ``./``. Plain
+    `fnmatch` then **silently does nothing** - the user believes files
+    are excluded while they keep being scanned. So each pattern is also
+    tried anchored anywhere within the path.
 
-    `exclude_globs` ve allowlist yolları aynı anlambilimi paylaşsın diye
-    tek bir yerde toplanmıştır.
+    Collected in one place so `exclude_globs` and allowlist paths share
+    the same semantics.
     """
     if not patterns:
         return False
@@ -170,8 +179,8 @@ def path_matches(path: str, patterns) -> bool:
             continue
 
         candidates = [pattern, f"*/{pattern}"]
-        # "tests/**" kalıbı dizinin kendisini de kapsamalı; böylece
-        # `os.walk` o dala hiç girmez.
+        # A "tests/**" pattern must cover the directory itself, so that
+        # `os.walk` never descends into that branch.
         bare = pattern.removesuffix("/**").removesuffix("/*")
         if bare != pattern:
             candidates += [bare, f"*/{bare}"]
@@ -180,7 +189,7 @@ def path_matches(path: str, patterns) -> bool:
             return True
         if fnmatch.fnmatch(name, pattern):
             return True
-        # Sade dizin adı ("test_data") yolun herhangi bir yerinde geçiyorsa.
+        # A bare directory name ("test_data") occurring anywhere in the path.
         if "*" not in pattern and "?" not in pattern:
             if f"/{pattern}/" in f"/{normalized}/":
                 return True
@@ -188,7 +197,7 @@ def path_matches(path: str, patterns) -> bool:
 
 
 def load_baseline(path: str) -> set[str]:
-    """Baz çizgisi dosyasından bastırılacak parmak izlerini okur."""
+    """Read the fingerprints to suppress from a baseline file."""
     if not path or not os.path.exists(path):
         return set()
     with open(path, encoding="utf-8") as handle:
@@ -210,10 +219,10 @@ def load_baseline(path: str) -> set[str]:
 
 
 def save_baseline(path: str, findings) -> int:
-    """Mevcut bulguları baz çizgisi olarak dondurur."""
+    """Freeze the current findings as a baseline."""
     payload = {
         "version": 1,
-        "note": "Bu dosyadaki parmak izleri raporlarda bastırılır.",
+        "note": "Fingerprints in this file are suppressed in reports.",
         "findings": sorted(
             {f.fingerprint for f in findings if getattr(f, "fingerprint", "")}
         ),

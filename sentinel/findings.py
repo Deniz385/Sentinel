@@ -1,4 +1,4 @@
-"""Bulgu (finding) veri modeli."""
+"""The finding data model."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from sentinel.severity import Severity
 
 __all__ = ["Finding", "LEGACY_COLUMNS", "CSV_COLUMNS"]
 
-#: Eski ``scan_results.csv`` sütunları — dış araçlar kırılmasın diye korunur.
+#: Legacy ``scan_results.csv`` columns, kept so external tools do not break.
 LEGACY_COLUMNS = ["file", "line", "type", "content_masked", "sha256"]
 
-#: Yeni sütunlar eskilerin sonuna eklenir.
+#: New columns are appended after the legacy ones.
 CSV_COLUMNS = LEGACY_COLUMNS + [
     "severity",
     "validated",
@@ -25,11 +25,11 @@ CSV_COLUMNS = LEGACY_COLUMNS + [
 
 @dataclass(frozen=True)
 class Finding:
-    """Tek bir hassas veri tespiti.
+    """A single sensitive-data detection.
 
-    `file` kullanıcıya gösterilen konumdur ve arşiv içindeki üyeler için
-    ``arsiv.zip::klasor/dosya.txt`` biçimini alır. `real_path` ise diskteki
-    gerçek dosyadır (karantina ve hash için kullanılır).
+    `file` is the location shown to the user; for members inside an
+    archive it takes the form ``archive.zip::folder/file.txt`. `real_path`
+    is the actual file on disk (used for quarantine and hashing).
     """
 
     file: str
@@ -48,7 +48,7 @@ class Finding:
 
     @property
     def source(self) -> str:
-        """Bulgunun geldiği kapsayıcı (arşiv) ya da dosyanın kendisi."""
+        """The containing archive the finding came from, or the file itself."""
         return self.file.split("::", 1)[0]
 
     @property
@@ -61,7 +61,7 @@ class Finding:
         return data
 
     def to_row(self) -> dict:
-        """CSV satırı (eski sütunlar önce)."""
+        """A CSV row (legacy columns first)."""
         return {
             "file": self.file,
             "line": self.line,
@@ -87,5 +87,5 @@ class Finding:
         return cls(**payload)
 
     def sort_key(self):
-        """Önce en kritik, sonra dosya/satır sırası."""
+        """Most critical first, then by file and line."""
         return (-self.severity_enum.rank, self.file, self.line, self.type)

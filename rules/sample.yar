@@ -1,25 +1,25 @@
 /*
- * Sentinel YARA kuralları
+ * Sentinel YARA rules
  *
- * Bu dosya v3.0'da depoda duruyordu ama hiçbir kod onu okumuyordu.
- * Artık `sentinel/yara_engine.py` tarafından derlenip çalıştırılır
- * (yara-python kurulu olduğunda: pip install 'sentinel-dlp[yara]').
+ * In v3.0 this file sat in the repository but no code ever read it.
+ * It is now compiled and run by `sentinel/yara_engine.py`
+ * (when yara-python is installed: pip install 'sentinel-dlp[yara]').
  *
- * `meta.severity` alanı Sentinel'in önem derecesi kademelerinden biri
- * olmalıdır: info | low | medium | high | critical
+ * The `meta.severity` field must be one of Sentinel's severity
+ * levels: info | low | medium | high | critical
  */
 
 rule Sentinel_EICAR_Test_File
 {
     meta:
-        description = "EICAR standart antivirüs test dosyası"
+        description = "EICAR standard antivirus test file"
         severity = "medium"
         author = "Sentinel DLP"
         reference = "https://www.eicar.org/download-anti-malware-testfile/"
 
     strings:
-        // Dizge parça parça yazılır; aksi hâlde bu kural dosyasının
-        // kendisi antivirüs tarafından karantinaya alınır.
+        // The string is assembled in pieces; otherwise this rule file
+        // would itself be quarantined by antivirus software.
         $a = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 
     condition:
@@ -29,7 +29,7 @@ rule Sentinel_EICAR_Test_File
 rule Sentinel_Credential_Dump
 {
     meta:
-        description = "Kimlik bilgisi dökümü (credential dump) kalıbı"
+        description = "Credential dump pattern"
         severity = "critical"
         author = "Sentinel DLP"
 
@@ -46,7 +46,7 @@ rule Sentinel_Credential_Dump
 rule Sentinel_Private_Key_Block
 {
     meta:
-        description = "Özel anahtar (private key) bloğu"
+        description = "Private key block"
         severity = "critical"
         author = "Sentinel DLP"
 
@@ -64,7 +64,7 @@ rule Sentinel_Private_Key_Block
 rule Sentinel_Webshell_Indicator
 {
     meta:
-        description = "Web kabuğu (webshell) göstergesi: kullanıcı girdisinden komut çalıştırma"
+        description = "Webshell indicator: executing commands from user input"
         severity = "high"
         author = "Sentinel DLP"
 
@@ -81,13 +81,15 @@ rule Sentinel_Webshell_Indicator
 rule Sentinel_Database_Dump
 {
     meta:
-        description = "Veritabanı dökümü — tablo yapısı ve toplu INSERT"
+        description = "Database dump - table structure and bulk INSERT"
         severity = "high"
         author = "Sentinel DLP"
 
     strings:
         $mysqldump = "-- MySQL dump" nocase
         $pgdump    = "-- PostgreSQL database dump" nocase
+        // The Turkish table names below are detection data: this rule
+        // targets dumps from Turkish systems as much as English ones.
         $create    = /CREATE TABLE `?(users?|customers?|musteri|kullanici|members?)`?/ nocase
         $insert    = /INSERT INTO `?(users?|customers?|musteri|kullanici)`?/ nocase
 
@@ -98,7 +100,7 @@ rule Sentinel_Database_Dump
 rule Sentinel_Exfiltration_Script
 {
     meta:
-        description = "Veri sızdırma betiği: dosya okuyup uzak adrese gönderme"
+        description = "Exfiltration script: reading files and posting them to a remote address"
         severity = "high"
         author = "Sentinel DLP"
 

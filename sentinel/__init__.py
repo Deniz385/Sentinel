@@ -1,4 +1,4 @@
-"""Sentinel — Hassas Veri Keşif ve Sızıntı Önleme (DLP) motoru."""
+"""Sentinel - sensitive data discovery and loss prevention (DLP) engine."""
 
 __version__ = "4.0.0"
 __all__ = [
@@ -13,7 +13,7 @@ __all__ = [
 
 
 def __getattr__(name):
-    # Ağır alt modülleri (pypdf, openpyxl...) sadece gerçekten istenince yükle.
+    # Load heavy submodules (pypdf, openpyxl, ...) only when actually asked for.
     if name in ("Scanner", "ScanResult"):
         from sentinel.engine import Scanner, ScanResult
 

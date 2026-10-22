@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Sentinel CLI giriş noktası.
+"""Sentinel CLI entry point.
 
-Asıl uygulama `sentinel` paketindedir; bu dosya `python main.py` ile
-çalıştırmaya alışmış kullanıcılar için ince bir sarmalayıcıdır.
-Kurulumdan sonra `sentinel` komutu da aynı işi yapar.
+The application itself lives in the `sentinel` package; this file is a
+thin wrapper for users used to running `python main.py`. After
+installation the `sentinel` command does the same thing.
 
-Eski kullanım korunur:
+The legacy invocation still works:
     python main.py --target test_data --no-html
-Yeni kullanım:
+The new one:
     python main.py scan test_data --format html,csv,sarif
 """
 
@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from sentinel.cli import main as cli_main  # noqa: E402
 
-# v3.0'da alt komut yoktu; argümanlar doğrudan verilince `scan` varsayılır.
+# v3.0 had no subcommands; bare arguments default to `scan`.
 _COMMANDS = {
     "scan", "watch", "vault", "rules", "precommit", "init", "doctor",
     "-h", "--help", "--version",

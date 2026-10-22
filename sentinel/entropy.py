@@ -1,9 +1,10 @@
-"""Shannon entropisi ve generic sır (secret) adayı tespiti.
+"""Shannon entropy and generic secret-candidate detection.
 
-Eski `utils.calculate_entropy` 256 kez `str.count()` çağırıyordu — yani her
-metin için O(256·n). Burada tek geçişte `Counter` ile O(n) hesaplanır ve
-fonksiyon gerçekten kullanılır: adlandırılmış deseni olmayan API
-anahtarlarını (`xoxb-...` olmayan rastgele 40 hane) entropi yakalar.
+The old `utils.calculate_entropy` called `str.count()` 256 times, i.e.
+O(256*n) for every piece of text. This computes it in a single pass with
+`Counter`, in O(n), and the function is actually put to use: entropy
+catches API keys that have no named pattern (random 40-character strings
+that do not start with `xoxb-` and friends).
 """
 
 from __future__ import annotations
@@ -25,50 +26,57 @@ _BASE64_CHARS = set(
 )
 _HEX_CHARS = set("0123456789abcdefABCDEF")
 
-# "token", "secret", "api_key" gibi bir bağlam kelimesi aynı satırdaysa
-# entropi eşiğini düşürürüz: bağlam, yanlış pozitifi büyük ölçüde keser.
+# When a context word such as "token", "secret" or "api_key" appears on the
+# same line we lower the entropy threshold: context cuts false positives
+# dramatically.
+#
+# The last three alternatives are Turkish ("sifre" = password, "anahtar" =
+# key, "parola" = passphrase). They are detection data, not prose: this
+# scanner targets Turkish codebases, where secrets are routinely named in
+# Turkish. Dropping them would blind the rule on its main audience, the
+# same way dropping the TR national-ID validator would.
 SECRET_CONTEXT_RE = re.compile(
     r"(?i)\b(secret|token|api[_-]?key|apikey|auth|bearer|credential|passwd|"
     r"password|private[_-]?key|access[_-]?key|client[_-]?secret|signature|"
     r"session|cookie|salt|sifre|anahtar|parola)\b"
 )
 
-# Entropi taraması için aday dizgeler: yeterince uzun, tek parça, ayraçsız.
+# Candidate strings for entropy scanning: long enough, contiguous, no spaces.
 _CANDIDATE_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,120}")
 
-# Entropi taramasının görmezden geleceği belirgin "sır değil" kalıpları.
+# Obvious "not a secret" shapes that entropy scanning should ignore.
 _OBVIOUS_NOISE_RE = re.compile(
     r"(?i)^(?:"
-    r"[0-9]+|"  # salt sayı (tarih, boyut, id)
-    r"[a-f0-9]{32}|"  # md5 — çoğunlukla checksum, sır değil
-    r"(?:[a-z]+[_-]){2,}[a-z]+|"  # snake_case / kebab-case kimlik
-    r"[A-Za-z]+"  # tek kelime
+    r"[0-9]+|"  # pure digits (date, size, id)
+    r"[a-f0-9]{32}|"  # md5 - usually a checksum, not a secret
+    r"(?:[a-z]+[_-]){2,}[a-z]+|"  # snake_case / kebab-case identifier
+    r"[A-Za-z]+"  # a single word
     r")$"
 )
 
-#: Kimlik/yol parçalarını ayıran karakterler.
+#: Characters that separate identifier and path segments.
 _SEGMENT_RE = re.compile(r"[_\-/=+]")
 
-#: Artan/azalan ardışık karakter dizisi bu uzunluğa ulaşırsa, dizge
-#: rastgele değil *sıralı* demektir.
+#: If an ascending/descending run of consecutive characters reaches this
+#: length, the string is *ordered* rather than random.
 _SEQUENTIAL_RUN = 6
 
 
 def _has_sequential_run(token: str, length: int = _SEQUENTIAL_RUN) -> bool:
-    """``abcdef`` / ``0123456789`` gibi sıralı bir dizi içeriyor mu?
+    """Does the token contain a sequential run such as ``abcdef`` or ``0123456789``?
 
-    Alfabe ve karakter kümesi sabitleri (``string.ascii_letters``
-    kopyaları, base64/hex/base58 alfabeleri) tanım gereği mümkün olan en
-    yüksek entropiye sahiptir — her karakter tam bir kez geçer. Yani
-    entropi onları sır sanmaya en yatkın olduğu yerdir. Rastgele üretilmiş
-    gerçek bir sır ise altı karakterlik ardışık bir diziyi pratikte hiç
-    içermez.
+    Alphabet and character-set constants (copies of
+    ``string.ascii_letters``, base64/hex/base58 alphabets) carry the
+    highest entropy possible by construction - every character occurs
+    exactly once. That makes them the place where entropy is most likely
+    to mistake a constant for a secret. A genuinely random secret, on the
+    other hand, practically never contains a six-character run.
     """
     if len(token) < length:
         return False
 
     ascending = descending = 1
-    # strict=False bilinçli: `token[1:]` tasarım gereği bir kısa.
+    # strict=False on purpose: `token[1:]` is one shorter by design.
     for previous, current in zip(token, token[1:], strict=False):
         step = ord(current) - ord(previous)
         ascending = ascending + 1 if step == 1 else 1
@@ -79,15 +87,17 @@ def _has_sequential_run(token: str, length: int = _SEQUENTIAL_RUN) -> bool:
 
 
 def _looks_like_identifier(token: str) -> bool:
-    """Kod kimliği ya da yol gibi mi görünüyor?
+    """Does the token look like a code identifier or a path?
 
-    ``return_when=FIRST_COMPLETED``, ``Qt_AlignmentFlag=AlignHCenter``,
-    ``usr/local/share`` gibi dizgeler ayraçla bölündüğünde her parçası ya
-    tamamen harf ya tamamen rakamdır. Rastgele bir sırda ise en az bir
-    parça harf ve rakamı birlikte taşır (``K7MDENG``, ``AbCd1234``).
+    Strings such as ``return_when=FIRST_COMPLETED``,
+    ``Qt_AlignmentFlag=AlignHCenter`` or ``usr/local/share`` split on
+    separators into segments that are each either all letters or all
+    digits. In a random secret at least one segment mixes the two
+    (``K7MDENG``, ``AbCd1234``).
 
-    Kural yalnızca **ayraç içeren** dizgelere uygulanır; tek parça bir
-    dizge gerçekten rastgele olabilir, onu entropiye bırakırız.
+    The rule applies only to strings that **contain a separator**; a
+    single-segment string may genuinely be random, so we leave that to
+    entropy.
     """
     segments = [part for part in _SEGMENT_RE.split(token) if part]
     if len(segments) < 2:
@@ -96,7 +106,7 @@ def _looks_like_identifier(token: str) -> bool:
 
 
 def shannon_entropy(text: str) -> float:
-    """Metnin Shannon entropisini (bit/karakter) döndürür."""
+    """Return the Shannon entropy of the text, in bits per character."""
     if not text:
         return 0.0
     length = len(text)
@@ -106,10 +116,10 @@ def shannon_entropy(text: str) -> float:
 
 
 def normalized_entropy(text: str) -> float:
-    """Entropiyi 0..1 aralığına normalize eder.
+    """Normalize entropy into the 0..1 range.
 
-    Kullanılan alfabenin boyutuna göre ölçekler; böylece hex bir dizge ile
-    base64 bir dizge aynı eşikle karşılaştırılabilir.
+    Scales by the size of the alphabet in use, so a hex string and a
+    base64 string can be compared against the same threshold.
     """
     if not text:
         return 0.0
@@ -120,10 +130,10 @@ def normalized_entropy(text: str) -> float:
 
 
 def _charset_threshold(token: str, base: float) -> float:
-    """Alfabeye göre entropi eşiği.
+    """Entropy threshold adjusted for the alphabet.
 
-    Hex alfabesi en fazla 4 bit/karakter taşıyabilir; base64 ise 6. Aynı
-    eşiği ikisine uygulamak hex sırlarını tamamen kaçırmak demektir.
+    A hex alphabet can carry at most 4 bits per character; base64 carries
+    6. Applying one threshold to both means missing hex secrets entirely.
     """
     chars = set(token)
     if chars <= _HEX_CHARS:
@@ -134,17 +144,18 @@ def _charset_threshold(token: str, base: float) -> float:
 
 
 def is_high_entropy(token: str, threshold: float = 4.0, min_length: int = 20) -> bool:
-    """Dizge, rastgele üretilmiş bir sır gibi mi görünüyor?"""
+    """Does the string look like a randomly generated secret?"""
     if len(token) < min_length:
         return False
     if _OBVIOUS_NOISE_RE.match(token):
         return False
-    # Tek karakter sınıfından oluşan uzun diziler (aaaa..., 1111...) sır değil.
+    # Long runs drawn from a single character class (aaaa..., 1111...)
+    # are not secrets.
     if len(set(token)) <= 4:
         return False
-    # Kaynak kodu taranırken en sık gelen iki yanlış pozitif sınıfı:
-    # alfabe sabitleri ve kimlik/yol ifadeleri. İkisi de yüksek entropilidir
-    # ama rastgele değildir; entropiden önce elenirler.
+    # The two most common false-positive classes when scanning source
+    # code: alphabet constants and identifier/path expressions. Both are
+    # high entropy yet not random, so they are filtered before entropy.
     if _has_sequential_run(token):
         return False
     if _looks_like_identifier(token):
@@ -153,6 +164,6 @@ def is_high_entropy(token: str, threshold: float = 4.0, min_length: int = 20) ->
 
 
 def iter_secret_candidates(line: str):
-    """Satırdaki entropi adaylarını `(token, start, end)` olarak üretir."""
+    """Yield entropy candidates in a line as ``(token, start, end)``."""
     for match in _CANDIDATE_RE.finditer(line):
         yield match.group(0), match.start(), match.end()

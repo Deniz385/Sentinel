@@ -1,12 +1,12 @@
-"""PDF raporu (reportlab).
+"""PDF report (reportlab).
 
-v3.0'daki iki kusur giderildi:
+Two defects from v3.0 are fixed:
 
-1. İçerik kaçışsız biçimde ``Paragraph``'a veriliyordu; ``<`` veya ``&``
-   içeren bir dosya adı PDF üretimini patlatıyordu. Artık her metin
-   XML-kaçışından geçer.
-2. Yazı tipi ``Helvetica`` idi ve Türkçe karakterler (ş, ğ, İ) bozuk
-   çıkıyordu. Artık sistemde bir Unicode TTF bulunursa kaydedilir.
+1. Content was handed to ``Paragraph`` unescaped; a filename containing
+   ``<`` or ``&`` blew up PDF generation. Every string now goes through
+   XML escaping.
+2. The font was ``Helvetica`` and non-ASCII characters came out broken.
+   A Unicode TTF is now registered when one is found on the system.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from sentinel.severity import Severity
 
 __all__ = ["write"]
 
-#: Türkçe karakterleri doğru basabilen, yaygın olarak bulunan yazı tipleri.
+#: Widely available fonts that render non-ASCII characters correctly.
 _FONT_CANDIDATES = (
     ("DejaVuSans", "DejaVuSans.ttf", "DejaVuSans-Bold.ttf"),
     ("LiberationSans", "LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"),
@@ -48,7 +48,7 @@ def _find_font(filename: str) -> str | None:
 
 
 def _register_font() -> tuple[str, str]:
-    """Unicode destekli yazı tipini kaydeder; bulunamazsa Helvetica'ya düşer."""
+    """Register a Unicode-capable font, falling back to Helvetica."""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
@@ -81,7 +81,7 @@ def write(result, output_path: str) -> tuple[bool, str]:
             TableStyle,
         )
     except ImportError:
-        return False, "PDF raporu için reportlab gerekli: pip install reportlab"
+        return False, "The PDF report requires reportlab: pip install reportlab"
 
     directory = os.path.dirname(os.path.abspath(output_path))
     if directory:
@@ -104,7 +104,7 @@ def write(result, output_path: str) -> tuple[bool, str]:
     )
 
     def cell(value) -> Paragraph:
-        # escape(): `<` ve `&` reportlab'in mini markup'ını bozmasın.
+        # escape(): keep `<` and `&` from breaking reportlab's mini markup.
         return Paragraph(escape(str(value)), body)
 
     document = SimpleDocTemplate(
@@ -114,31 +114,31 @@ def write(result, output_path: str) -> tuple[bool, str]:
         rightMargin=12 * mm,
         topMargin=12 * mm,
         bottomMargin=12 * mm,
-        title="Sentinel DLP Raporu",
+        title="Sentinel DLP Report",
     )
 
     counts = result.counts_by_severity()
     elements = [
-        Paragraph("SENTINEL — Hassas Veri Tarama Raporu", title_style),
+        Paragraph("SENTINEL - Sensitive Data Scan Report", title_style),
         Spacer(1, 8),
         Paragraph(
-            f"Oluşturulma: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}<br/>"
-            f"Hedef: {escape(result.target)}<br/>"
-            f"Risk skoru: <b>{result.risk_score}/100</b> &nbsp;·&nbsp; "
-            f"Bulgu: <b>{len(result.findings)}</b> "
-            f"({result.unique_count} tekil sır) &nbsp;·&nbsp; "
-            f"Taranan dosya: {result.files_scanned} &nbsp;·&nbsp; "
-            f"Süre: {result.duration:.2f} sn",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br/>"
+            f"Target: {escape(result.target)}<br/>"
+            f"Risk score: <b>{result.risk_score}/100</b> &nbsp;·&nbsp; "
+            f"Findings: <b>{len(result.findings)}</b> "
+            f"({result.unique_count} unique secrets) &nbsp;·&nbsp; "
+            f"Files scanned: {result.files_scanned} &nbsp;·&nbsp; "
+            f"Duration: {result.duration:.2f} s",
             normal,
         ),
         Spacer(1, 10),
     ]
 
-    severity_data = [["Önem Derecesi", "Adet"]]
+    severity_data = [["Severity", "Count"]]
     for severity in sorted(Severity, key=lambda s: -s.rank):
         count = counts.get(severity.value, 0)
         if count:
-            severity_data.append([severity.label_tr, str(count)])
+            severity_data.append([severity.label, str(count)])
 
     if len(severity_data) > 1:
         summary_table = Table(severity_data, colWidths=[60 * mm, 25 * mm])
@@ -161,22 +161,22 @@ def write(result, output_path: str) -> tuple[bool, str]:
 
     if not result.findings:
         elements.append(
-            Paragraph("Eşik üstü hassas veri bulunamadı.", normal)
+            Paragraph("No sensitive data at or above the threshold.", normal)
         )
         document.build(elements)
         return True, output_path
 
-    elements.append(Paragraph("Bulgular (maskelenmiş)", normal))
+    elements.append(Paragraph("Findings (masked)", normal))
     elements.append(Spacer(1, 6))
 
-    data = [["Önem", "Tür", "Konum", "Satır", "İçerik (maskeli)"]]
+    data = [["Severity", "Type", "Location", "Line", "Content (masked)"]]
     for finding in result.findings[:MAX_ROWS]:
         data.append(
             [
-                cell(finding.severity_enum.label_tr),
+                cell(finding.severity_enum.label),
                 cell(finding.type),
                 cell(finding.file),
-                cell(finding.line or "—"),
+                cell(finding.line or "-"),
                 cell(finding.content_masked),
             ]
         )
@@ -208,8 +208,8 @@ def write(result, output_path: str) -> tuple[bool, str]:
         elements.append(PageBreak())
         elements.append(
             Paragraph(
-                f"Rapora ilk {MAX_ROWS} bulgu yazıldı; {remaining} bulgu daha var. "
-                "Tam liste için CSV veya JSON raporunu kullanın.",
+                f"The first {MAX_ROWS} findings are in this report; {remaining} more exist. "
+                "Use the CSV or JSON report for the full list.",
                 normal,
             )
         )
@@ -222,7 +222,7 @@ def write(result, output_path: str) -> tuple[bool, str]:
 
 
 def create_pdf_report(results, filename: str):
-    """Eski API uyumluluğu: sözlük listesi kabul eder."""
+    """Legacy API compatibility: accepts a list of dicts."""
     from sentinel.engine import ScanResult
     from sentinel.findings import Finding
 

@@ -1,9 +1,9 @@
-"""Rapor üretici testleri.
+"""Report writer tests.
 
-En kritik test sınıfı :class:`TestHtmlEscaping`. v3.0'ın `reporter.py`'si
-dosya yollarını ve bulgu içeriğini kaçışsız biçimde HTML'e basıyordu;
-``<script>`` içeren bir dosya adı, raporu açan güvenlik analistine karşı
-çalışan bir XSS'e dönüşüyordu.
+The most important class here is :class:`TestHtmlEscaping`. The v3.0
+`reporter.py` wrote file paths and finding content into HTML unescaped;
+a filename containing ``<script>`` turned into an XSS aimed at the
+security analyst opening the report.
 """
 
 from __future__ import annotations
@@ -35,13 +35,13 @@ def finding(**kwargs) -> Finding:
     data = {
         "file": "src/app.py",
         "line": 12,
-        "type": "TC_KIMLIK",
-        "title": "TC Kimlik Numarası",
+        "type": "TR_NATIONAL_ID",
+        "title": "Turkish National Identity Number",
         "content_masked": "10*******46",
         "severity": Severity.HIGH.value,
         "sha256": "a" * 64,
         "fingerprint": "deadbeef12345678",
-        "snippet": "Musteri TC: 10*******46 onaylandi",
+        "snippet": "Customer ID: 10*******46 confirmed",
         "validated": True,
         "column": 13,
     }
@@ -51,7 +51,7 @@ def finding(**kwargs) -> Finding:
 
 # ---------------------------------------------------------------------------
 class TestHtmlEscaping:
-    """Enjeksiyon sınıfı yapısal olarak kapalı olmalı."""
+    """The injection class must be closed structurally."""
 
     def test_script_in_filename_is_escaped(self):
         from sentinel.reporting.html import render
@@ -67,10 +67,10 @@ class TestHtmlEscaping:
             make_result([finding(content_masked="<img src=x onerror=alert(1)>")])
         )
         assert "<img src=x onerror=alert(1)>" not in html
-        assert "onerror=alert(1)" in html  # kaçışlı hâlde var
+        assert "onerror=alert(1)" in html  # present, but escaped
 
     def test_attribute_breakout_is_escaped(self):
-        """data-* niteliklerine yazılan değer tırnaktan kaçamamalı."""
+        """A value written into a data-* attribute must not escape the quotes."""
         from sentinel.reporting.html import render
 
         html = render(make_result([finding(type='X" onmouseover="alert(1)')]))
@@ -95,7 +95,7 @@ class TestHtmlEscaping:
 
 class TestHtmlContent:
     def test_is_self_contained(self):
-        """Çevrimdışı olay müdahalesinde de aynı görünmeli: dış kaynak yok."""
+        """Must look the same during offline incident response: no external resources."""
         from sentinel.reporting.html import render
 
         html = render(make_result([finding()]))
@@ -118,37 +118,37 @@ class TestHtmlContent:
         )
         html = render(result)
         assert str(result.risk_score) in html
-        assert "Risk Skoru" in html
+        assert "Risk Score" in html
 
     def test_empty_result_says_clean(self):
         from sentinel.reporting.html import render
 
         html = render(make_result([]))
-        assert "Sızıntı tespit edilmedi" in html
+        assert "No leaks detected" in html
 
     def test_cancelled_scan_is_flagged(self):
         from sentinel.reporting.html import render
 
         html = render(make_result([finding()], cancelled=True))
-        assert "durduruldu" in html
+        assert "stopped before it finished" in html
 
     def test_table_is_truncated_with_notice(self):
         from sentinel.reporting import html as html_module
 
         many = [finding(line=index) for index in range(html_module.MAX_TABLE_ROWS + 50)]
         rendered = html_module.render(make_result(many))
-        assert "bulgu daha var" in rendered
+        assert "more exist" in rendered
 
     def test_type_chart_folds_tail_into_other(self):
-        """9. kategori için yeni renk üretilmez; 'Diğer'e katlanır."""
+        """No new colour is invented for a ninth category; it folds into 'Other'."""
         from sentinel.reporting import html as html_module
 
         findings = [
-            finding(type=f"TUR_{index}", line=index) for index in range(12)
+            finding(type=f"TYPE_{index}", line=index) for index in range(12)
         ]
         rows = html_module._type_rows(make_result(findings))
         assert len(rows) == html_module.MAX_TYPE_BARS + 1
-        assert rows[-1]["label"] == "Diğer"
+        assert rows[-1]["label"] == "Other"
 
     def test_severity_rows_skip_empty_levels(self):
         from sentinel.reporting import html as html_module
@@ -159,7 +159,7 @@ class TestHtmlContent:
     def test_writes_file(self, tmp_path):
         from sentinel.reporting.html import write
 
-        path = tmp_path / "rapor" / "dashboard.html"
+        path = tmp_path / "report" / "dashboard.html"
         write(make_result([finding()]), str(path))
         assert path.is_file()
         assert path.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
@@ -236,16 +236,16 @@ class TestJson:
         assert data["schema"] == "sentinel-scan/1"
         assert data["tool"]["name"] == "Sentinel DLP"
         assert data["summary"]["findings"] == 1
-        assert data["findings"][0]["type"] == "TC_KIMLIK"
+        assert data["findings"][0]["type"] == "TR_NATIONAL_ID"
         assert data["findings"][0]["source"] == "src/app.py"
 
     def test_turkish_characters_survive(self, tmp_path):
         from sentinel.reporting.json_report import write
 
         path = tmp_path / "out.json"
-        write(make_result([finding(file="müşteri/şifreler.txt")]), str(path))
+        write(make_result([finding(file="données/mots-de-passe.txt")]), str(path))
         data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["findings"][0]["file"] == "müşteri/şifreler.txt"
+        assert data["findings"][0]["file"] == "données/mots-de-passe.txt"
 
 
 class TestSarif:
@@ -269,14 +269,14 @@ class TestSarif:
         write(make_result([finding()], target="/proje"), str(path))
         entry = json.loads(path.read_text(encoding="utf-8"))["runs"][0]["results"][0]
 
-        assert entry["ruleId"] == "TC_KIMLIK"
+        assert entry["ruleId"] == "TR_NATIONAL_ID"
         assert entry["level"] == "error"
         region = entry["locations"][0]["physicalLocation"]["region"]
         assert region["startLine"] == 12
         assert region["startColumn"] == 13
 
     def test_uri_is_relative(self, tmp_path):
-        """Mutlak Windows yolları GitHub panelini bozar."""
+        """Absolute Windows paths break the GitHub panel."""
         from sentinel.reporting.sarif import write
 
         path = tmp_path / "out.sarif"
@@ -294,7 +294,7 @@ class TestSarif:
         path = tmp_path / "out.sarif"
         write(
             make_result(
-                [finding(file="/proje/a.zip::ic/gizli.txt")], target="/proje"
+                [finding(file="/project/a.zip::inner/secret.txt")], target="/project"
             ),
             str(path),
         )
@@ -325,7 +325,7 @@ class TestSarif:
         assert levels == ["error", "warning", "note"]
 
     def test_unknown_rule_gets_a_definition(self, tmp_path):
-        """YARA kuralları çalışma anında eklenir; SARIF yine geçerli olmalı."""
+        """YARA rules are added at runtime; the SARIF must stay valid."""
         from sentinel.reporting.sarif import write
 
         path = tmp_path / "out.sarif"
@@ -341,9 +341,9 @@ class TestMarkdown:
         from sentinel.reporting.markdown import render
 
         text = render(make_result([finding()]))
-        assert text.startswith("# Sentinel DLP Tarama Raporu")
-        assert "| Önem | Tür | Konum | Satır | İçerik (maskeli) |" in text
-        assert "TC_KIMLIK" in text
+        assert text.startswith("# Sentinel DLP Scan Report")
+        assert "| Severity | Type | Location | Line | Content (masked) |" in text
+        assert "TR_NATIONAL_ID" in text
 
     def test_pipes_are_escaped(self):
         from sentinel.reporting.markdown import render
@@ -354,7 +354,7 @@ class TestMarkdown:
     def test_clean_result(self):
         from sentinel.reporting.markdown import render
 
-        assert "bulunamadı" in render(make_result([]))
+        assert "No sensitive data" in render(make_result([]))
 
 
 class TestPdf:
@@ -368,7 +368,7 @@ class TestPdf:
         assert path.read_bytes().startswith(b"%PDF")
 
     def test_markup_characters_do_not_break_it(self, tmp_path):
-        """v3.0: `<` içeren veri reportlab'in markup'ını bozup PDF'i patlatıyordu."""
+        """v3.0: data containing `<` broke reportlab's markup and blew up the PDF."""
         pytest.importorskip("reportlab")
         from sentinel.reporting.pdf_report import write
 
@@ -400,11 +400,11 @@ class TestWriteReports:
             )
 
     def test_unknown_format_is_reported_not_raised(self, tmp_path):
-        written = write_reports(make_result([]), str(tmp_path), ["html", "kasetli"])
-        assert written["kasetli"].startswith("HATA")
-        assert not written["html"].startswith("HATA")
+        written = write_reports(make_result([]), str(tmp_path), ["html", "bogusfmt"])
+        assert written["bogusfmt"].startswith("ERROR")
+        assert not written["html"].startswith("ERROR")
 
     def test_creates_output_directory(self, tmp_path):
-        target = tmp_path / "yeni" / "dizin"
+        target = tmp_path / "new" / "directory"
         write_reports(make_result([]), str(target), ["csv"])
         assert target.is_dir()

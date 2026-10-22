@@ -1,8 +1,8 @@
-"""Çapraz dosya korelasyonu testleri.
+"""Cross-file correlation tests.
 
-Buradaki asıl iddia şu: bulgu sayısı iş yükünü ölçmez. Aynı anahtarın 40
-kopyası tek bir iptalle kapanır. Testler hem gruplamanın doğruluğunu hem
-de gruplamanın **hassas veriyi açığa çıkarmadığını** sınar.
+The claim under test: the finding count does not measure workload.
+Forty copies of one key close with a single revocation. These tests
+check both that grouping is correct and that it **reveals no
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def make(
         content_masked=masked,
         severity=severity,
         fingerprint=fingerprint,
-        title="AWS Erişim Anahtarı",
+        title="AWS Access Key",
     )
 
 
@@ -51,7 +51,7 @@ def run(target, **overrides):
 
 class TestGrouping:
     def test_same_secret_in_many_files_is_one_group(self):
-        findings = [make(file=f"dosya{i}.txt", line=i + 1) for i in range(5)]
+        findings = [make(file=f"file{i}.txt", line=i + 1) for i in range(5)]
         groups = group_findings(findings)
         assert len(groups) == 1
         assert groups[0].count == 5
@@ -66,8 +66,8 @@ class TestGrouping:
         assert len(group_findings(findings)) == 2
 
     def test_same_value_different_rule_stays_separate(self):
-        # Parmak izi `kural:değer` üzerinden üretildiği için pratikte
-        # çakışmaz; yine de gruplama anahtarı kuralı içermeli.
+        # Fingerprints are derived from `rule:value`, so in practice they
+        # do not collide; the grouping key must still include the rule.
         findings = [
             make(type="AWS_ACCESS_KEY", fingerprint="same"),
             make(type="GITHUB_TOKEN", fingerprint="same"),
@@ -83,19 +83,19 @@ class TestGrouping:
         assert groups[0].shared is False
 
     def test_findings_without_fingerprint_never_merge(self):
-        # YARA bulguları tek bir değere değil dosyanın tamamına uyar;
-        # birleştirilirlerse "aynı sır" iddiası yalan olur.
+        # YARA findings match a whole file, not a single value; merging
+        # them would make the claim "the same secret" a lie.
         findings = [
-            make(file="a.txt", fingerprint="", type="YARA_WEBSHELL", masked="(kural)"),
-            make(file="b.txt", fingerprint="", type="YARA_WEBSHELL", masked="(kural)"),
+            make(file="a.txt", fingerprint="", type="YARA_WEBSHELL", masked="(rule)"),
+            make(file="b.txt", fingerprint="", type="YARA_WEBSHELL", masked="(rule)"),
         ]
         groups = group_findings(findings)
         assert len(groups) == 2
         assert all(group.shared is False for group in groups)
 
     def test_group_takes_the_worst_severity(self):
-        # Aynı değer bir dosyada doğrulanmış (kritik), ötekinde
-        # doğrulanamamış (bir kademe düşük) olabilir; grup en kötüyü anlatmalı.
+        # The same value may be validated (critical) in one file and
+        # unvalidated (a level lower) in another; the group shows the worst.
         findings = [
             make(file="a.txt", severity=Severity.MEDIUM.value),
             make(file="b.txt", severity=Severity.CRITICAL.value),
@@ -109,7 +109,7 @@ class TestGrouping:
         groups = group_findings(findings, max_locations=10)
         assert len(groups[0].locations) == 10
         assert groups[0].truncated == 20
-        # Dosya sayısı kırpılmadan doğru kalmalı.
+        # The file count must stay exact, untruncated.
         assert groups[0].file_count == 30
         assert groups[0].count == 30
 
@@ -131,7 +131,7 @@ class TestGrouping:
 
 class TestResultIntegration:
     def test_copied_secrets_collapse_to_unique_count(self, tree):
-        # Aynı iki değer beş dosyaya kopyalanmış: 10 bulgu, 2 tekil sır.
+        # The same two values copied into five files: 10 findings, 2 secrets.
         files = {
             f"kopya{i}.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(5)
         }
@@ -159,14 +159,14 @@ class TestResultIntegration:
     def test_groups_are_memoised_but_follow_new_findings(self, tree):
         result = run(tree({"a.txt": f"TC: {VALID_TCKN}\n"}))
         first = result.groups()
-        assert result.groups() is first  # aynı nesne: yeniden gruplanmadı
+        assert result.groups() is first  # same object: no regrouping
 
         result.findings.append(make(file="b.txt"))
         assert len(result.groups()) == len(first) + 1
 
 
 class TestNoDisclosure:
-    """Korelasyon, maskelemeyi bozmamalı."""
+    """Correlation must not break masking."""
 
     def test_group_output_carries_no_clear_value(self, tree):
         files = {f"k{i}.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(3)}
@@ -181,7 +181,7 @@ class TestNoDisclosure:
     def test_json_report_secrets_block_is_masked(self, tree, tmp_path):
         from sentinel.reporting import json_report
 
-        files = {f"k{i}.txt": f"Kart: {VALID_VISA}\n" for i in range(4)}
+        files = {f"k{i}.txt": f"Card: {VALID_VISA}\n" for i in range(4)}
         result = run(tree(files))
         path = tmp_path / "out" / "scan.json"
         json_report.write(result, str(path))
@@ -200,44 +200,44 @@ class TestReportWiring:
         files = {f"k{i}.txt": f"TC: {VALID_TCKN}\n" for i in range(4)}
         text = markdown.render(run(tree(files)))
 
-        assert "tekil sır" in text
-        assert "Birden fazla dosyaya kopyalanmış sırlar" in text
+        assert "unique secrets" in text
+        assert "Secrets copied into more than one file" in text
         assert VALID_TCKN not in text
 
     def test_markdown_omits_section_when_nothing_is_shared(self, tree):
         from sentinel.reporting import markdown
 
         text = markdown.render(run(tree({"a.txt": f"TC: {VALID_TCKN}\n"})))
-        assert "Birden fazla dosyaya kopyalanmış" not in text
+        assert "Secrets copied into more than one file" not in text
 
     def test_html_shows_unique_tile_and_spread_table(self, tree):
         from sentinel.reporting import html
 
-        files = {f"k{i}.txt": f"Kart: {VALID_VISA}\n" for i in range(3)}
+        files = {f"k{i}.txt": f"Card: {VALID_VISA}\n" for i in range(3)}
         page = html.render(run(tree(files)))
 
-        assert "Tekil Sır" in page
-        assert "Birden fazla dosyaya kopyalanmış sırlar" in page
+        assert "Unique Secrets" in page
+        assert "Secrets copied into more than one file" in page
         assert VALID_VISA not in page
 
     def test_html_shortens_paths_against_the_target(self, tree):
         from sentinel.reporting import html
 
-        files = {f"ekip/k{i}.txt": f"Kart: {VALID_VISA}\n" for i in range(3)}
+        files = {f"team/k{i}.txt": f"Card: {VALID_VISA}\n" for i in range(3)}
         target = tree(files)
         page = html.render(run(target)).replace("\\", "/")
-        # Yalnızca özet bloğu: ayrıntı tablosu tam yolu göstermeye devam eder.
+        # The summary block only: the detail table still shows full paths.
         block = page.split('class="panel spread"', 1)[1].split("</section>", 1)[0]
 
-        # Özet bloğunda yedi mutlak yolu yan yana basmak gürültü duvarı
-        # üretiyordu; hedefe göreli yol okunur kalır.
-        assert "ekip/k0.txt" in block
+        # Seven absolute paths side by side in the summary made a wall of
+        # noise; a target-relative path stays readable.
+        assert "team/k0.txt" in block
         assert str(target).replace("\\", "/") not in block
 
     def test_relative_keeps_paths_outside_the_target(self):
         from sentinel.reporting.html import _relative
 
-        assert _relative("/veri/alt/a.txt", "/veri") == "alt/a.txt".replace("/", os.sep)
-        # Hedefin dışındaki yol kısaltma uğruna yanlış gösterilmemeli.
-        assert _relative("/baska/a.txt", "/veri") == "/baska/a.txt"
-        assert _relative("/veri/a.txt", "") == "/veri/a.txt"
+        assert _relative("/data/sub/a.txt", "/data") == "sub/a.txt".replace("/", os.sep)
+        # A path outside the target must not be misreported to shorten it.
+        assert _relative("/other/a.txt", "/data") == "/other/a.txt"
+        assert _relative("/data/a.txt", "") == "/data/a.txt"

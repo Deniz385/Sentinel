@@ -1,72 +1,72 @@
 # 🛡️ Sentinel
 
-**Hassas veri keşif ve sızıntı önleme (DLP) aracı.** Dosya sistemindeki
-KVKK / GDPR / PCI-DSS kapsamındaki verileri ve koda sızmış kimlik
-bilgilerini bulur, önem derecesine göre sıralar, raporlar ve isterseniz
-şifreleyip karantinaya alır.
+**Sensitive data discovery and loss prevention (DLP).** Finds data in
+scope for KVKK / GDPR / PCI-DSS on a filesystem, along with credentials
+leaked into source code; ranks findings by severity, reports them, and
+optionally encrypts and quarantines the files.
 
-Çapraz platform (Linux · macOS · Windows) · Python 3.10+ · sıfır zorunlu
-ağ erişimi.
+Cross-platform (Linux · macOS · Windows) · Python 3.10+ · no network
+access required.
 
 ```
-sentinel scan ~/Belgeler --format html,sarif --fail-on high
+sentinel scan ~/Documents --format html,sarif --fail-on high
 ```
 
 ---
 
-## Neden
+## Why
 
-Hassas veri genelde bulunması gereken yerde durmaz: bir müşteri listesi
-ZIP'in içindeki Excel'e, bir API anahtarı test betiğine, bir kimlik
-fotokopisi taranmış PDF'e düşer. Sentinel bu yerlere bakar ve **"ne kadar
-kötü?"** sorusunu cevaplar — 500 e-posta adresiyle 1 AWS anahtarını aynı
-listede eşit göstermez.
+Sensitive data rarely stays where it belongs: a customer list ends up in
+a spreadsheet inside a ZIP, an API key in a test script, a scan of an ID
+card in a PDF. Sentinel looks in those places and answers **"how bad is
+it?"** - it does not show 500 email addresses and one AWS key as equals
+in a flat list.
 
-## Özellikler
+## Features
 
 | | |
 |---|---|
-| **27 tespit kuralı** | TC Kimlik · IBAN · kredi kartı · telefon · plaka · AWS/Google/GitHub/Slack/Stripe/OpenAI anahtarları · özel anahtar · JWT · veritabanı bağlantı dizesi · kripto cüzdan · sağlık verisi |
-| **Algoritmik doğrulama** | TCKN kontrol hanesi · Luhn + kart markası · IBAN mod-97 · JWT başlık çözümü · Base58Check. Yanlış pozitifleri kökten keser |
-| **Entropi taraması** | Adlandırılmış deseni olmayan rastgele sırları yakalar |
-| **Biçim desteği** | Metin/kod · PDF · Word · Excel · PowerPoint · **ZIP (özyinelemeli)** · görsel (OCR) |
-| **5 kademeli önem derecesi** | `info` → `critical`, 0-100 toplu risk skoru |
-| **Çapraz dosya korelasyonu** | Aynı sırrın tüm kopyaları tek kalemde: "21 bulgu / 1 tekil sır". Eşleştirme parmak izi üzerinden, değer hiç açılmadan |
-| **Artımlı tarama** | `--incremental` ile değişmemiş dosyalar atlanır (ölçüm: 400 dosya 0,87 sn → **0,03 sn**) |
-| **Yanlış pozitif yönetimi** | Allowlist (yol/değer/parmak izi/regex) · satır içi `sentinel:ignore` · baz çizgisi |
-| **6 rapor biçimi** | HTML panosu · CSV · JSON · **SARIF** · Markdown · PDF |
-| **Şifreli karantina** | AES-256-GCM, doğrulanmış silme, bütünlük denetimi |
-| **Gerçek zamanlı izleme** | `sentinel watch` — yeni/değişen dosyaları anında tarar |
-| **CI entegrasyonu** | Anlamlı çıkış kodları · `--fail-on` kapısı · git pre-commit kancası |
-| **Gizlilik** | Rapor, log ve webhook yüklerinde **açık hassas veri yoktur** — hepsi maskelenir |
+| **27 detection rules** | National ID · IBAN · credit card · phone · vehicle plate · AWS/Google/GitHub/Slack/Stripe/OpenAI keys · private key · JWT · database connection string · crypto wallet · health data |
+| **Algorithmic validation** | National-ID check digits · Luhn plus card brand · IBAN mod-97 · JWT header decode · Base58Check. Cuts false positives at the root |
+| **Entropy scanning** | Catches random secrets that have no named pattern |
+| **Format support** | Text and code · PDF · Word · Excel · PowerPoint · **ZIP (recursive)** · images (OCR) |
+| **Five severity levels** | `info` → `critical`, plus an aggregate 0-100 risk score |
+| **Cross-file correlation** | Every copy of a secret in one item: "21 findings / 1 unique secret". Matched on the fingerprint, with the value never revealed |
+| **Incremental scanning** | `--incremental` skips unchanged files (measured: 400 files, 0.87 s → **0.03 s**) |
+| **False-positive management** | Allowlist (path/value/fingerprint/regex) · inline `sentinel:ignore` · baseline |
+| **Six report formats** | HTML dashboard · CSV · JSON · **SARIF** · Markdown · PDF |
+| **Encrypted quarantine** | AES-256-GCM, verified deletion, integrity checking |
+| **Real-time monitoring** | `sentinel watch` scans new and changed files as they appear |
+| **CI integration** | Meaningful exit codes · a `--fail-on` gate · a git pre-commit hook |
+| **Privacy** | **No cleartext sensitive data** in reports, logs or webhook payloads - everything is masked |
 
 ---
 
-## Kurulum
+## Installation
 
 ```bash
 git clone https://github.com/deniz385/Sentinel.git
 cd Sentinel
 
-# Çekirdek (CLI + metin/kod taraması)
+# Core (CLI plus text and code scanning)
 pip install -e .
 
-# Tüm eklentiler (PDF, Office, OCR, izleme, GUI, raporlar)
+# Every extra (PDF, Office, OCR, monitoring, GUI, reports)
 pip install -e ".[all]"
 ```
 
-İsteğe bağlı eklentiler tek tek de kurulabilir:
+Optional extras can also be installed individually:
 
 ```bash
 pip install -e ".[docs]"     # PDF, Word, Excel, PowerPoint
-pip install -e ".[ocr]"      # görsel / taranmış belge analizi
-pip install -e ".[monitor]"  # gerçek zamanlı izleme
-pip install -e ".[pdf]"      # PDF raporu
-pip install -e ".[yara]"     # YARA kural motoru
-pip install -e ".[gui]"      # masaüstü arayüzü
+pip install -e ".[ocr]"      # images and scanned documents
+pip install -e ".[monitor]"  # real-time monitoring
+pip install -e ".[pdf]"      # PDF report
+pip install -e ".[yara]"     # YARA rule engine
+pip install -e ".[gui]"      # desktop interface
 ```
 
-OCR için Tesseract motorunun ayrıca kurulması gerekir:
+OCR needs the Tesseract engine installed separately:
 
 ```bash
 apt install tesseract-ocr tesseract-ocr-tur    # Debian/Ubuntu
@@ -74,7 +74,7 @@ brew install tesseract tesseract-lang          # macOS
 # Windows: https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
-Neyin kurulu olduğunu görmek için:
+To see what is installed:
 
 ```bash
 sentinel doctor
@@ -82,103 +82,107 @@ sentinel doctor
 
 ---
 
-## Kullanım
+## Usage
 
-### Tarama
-
-```bash
-sentinel scan ~/Belgeler                      # varsayılan: HTML + CSV raporu
-sentinel scan . --format html,csv,json,sarif  # birden çok biçim
-sentinel scan . --min-severity high           # sadece ciddi bulgular
-sentinel scan . --only secret                 # sadece sır/anahtar kuralları
-sentinel scan . --skip-rules EMAIL,PRIVATE_IP # gürültülü kuralları kapat
-sentinel scan . --ocr                         # görselleri de tara
-sentinel scan . -j 8                          # 8 paralel işçi
-sentinel scan . --verbose                     # her bulguyu ekrana yaz
-```
-
-### Artımlı tarama
-
-Büyük bir paylaşımı düzenli olarak taradığınızda, değişmemiş dosyaları
-tekrar okumanın anlamı yok:
+### Scanning
 
 ```bash
-sentinel scan /mnt/paylasim --incremental                  # değişmemişleri atla
-sentinel scan /mnt/paylasim --incremental --cache-path /var/lib/sentinel.json
-sentinel scan /mnt/paylasim --incremental --clear-cache    # önbelleği sıfırla
+sentinel scan ~/Documents                     # default: HTML + CSV report
+sentinel scan . --format html,csv,json,sarif  # several formats
+sentinel scan . --min-severity high           # serious findings only
+sentinel scan . --only secret                 # secret and key rules only
+sentinel scan . --skip-rules EMAIL,PRIVATE_IP # turn off noisy rules
+sentinel scan . --ocr                         # scan images too
+sentinel scan . -j 8                          # 8 parallel workers
+sentinel scan . --verbose                     # print every finding
 ```
 
-Ölçüm (400 dosya · 4,3 MB): tam tarama **0,87 sn**, tamamı önbellekten
-**0,03 sn**, bir dosya değişmişken **0,04 sn**.
+### Incremental scanning
 
-Önbelleğin güvenli olması için konan sınırlar:
-
-- **Varsayılan kapalı.** Araç sorulmadan "bu dosya değişmemiş"
-  varsayımına dayanmaz.
-- Kural kataloğu, yapılandırma ya da Sentinel sürümü değişirse önbellek
-  **tamamen** düşer — bayat bir kayıt yeni kuralın bulacağı sırrı gizler.
-- Okuma hatası alan dosyalar önbelleğe **yazılmaz**; kilitli bir dosya
-  sonsuza kadar görünmez olmaz.
-- `--quarantine` ile birlikte önbellek **hiç kullanılmaz**: veri silen bir
-  karar bayat kanıta dayanamaz (CLI bunu uyarıyla söyler).
-- Tazelik ölçütü `(mtime, boyut)` bir sezgidir, kanıt değil. mtime'ı geri
-  alıp boyutu koruyan bir değişiklik önbelleği atlatır — adli kesinlik
-  gerekiyorsa artımlı tarama kapalı kalmalı.
-
-### Kuralları görmek
+When you scan a large share regularly, there is no point re-reading the
+files that have not changed:
 
 ```bash
-sentinel rules                 # tüm kurallar, önem dereceleriyle
-sentinel rules --tag secret    # sadece sır avı kuralları
-sentinel rules --json          # makine okunur
+sentinel scan /mnt/share --incremental                  # skip unchanged files
+sentinel scan /mnt/share --incremental --cache-path /var/lib/sentinel.json
+sentinel scan /mnt/share --incremental --clear-cache    # reset the cache
 ```
 
-### Gerçek zamanlı izleme
+Measured (400 files · 4.3 MB): a full scan takes **0.87 s**, entirely
+from cache **0.03 s**, and with one file changed **0.04 s**.
+
+The limits that keep the cache safe:
+
+- **Off by default.** The tool does not assume "this file has not
+  changed" unless asked to.
+- If the rule catalogue, the configuration or the Sentinel version
+  changes, the cache is dropped **entirely** - a stale entry hides the
+  secret a new rule would have found.
+- Files that fail to read are **not** written to the cache; a locked
+  file does not become invisible forever.
+- With `--quarantine` the cache is **never used**: a decision that
+  deletes data cannot rest on stale evidence (the CLI says so).
+- The freshness test `(mtime, size)` is a heuristic, not proof. A change
+  that restores mtime and preserves size slips past it - if you need
+  forensic certainty, leave incremental scanning off.
+
+### Listing the rules
 
 ```bash
-sentinel watch ~/Indirilenler
+sentinel rules                 # every rule, with severities
+sentinel rules --tag secret    # secret-hunting rules only
+sentinel rules --json          # machine readable
 ```
 
-### Karantina kasası
-
-Riskli dosyaları AES-256-GCM ile şifreleyip izole eder. **Orijinal dosya
-yalnızca şifreli kopya geri çözülüp SHA-256'sı eşleştikten sonra silinir.**
+### Real-time monitoring
 
 ```bash
-sentinel scan ~/Belgeler --quarantine --min-severity critical
-sentinel vault list                      # kasadaki dosyalar
-sentinel vault verify                    # bütünlük denetimi
-sentinel vault restore <dosya.enc>       # orijinal konumuna geri yükle
-sentinel vault purge --all               # kalıcı sil
-sentinel vault migrate                   # eski karantina dizinlerini taşı
+sentinel watch ~/Downloads
 ```
 
-Kasa anahtarı sırayla şu kaynaklardan alınır:
+### The quarantine vault
 
-1. `SENTINEL_VAULT_KEY` ortam değişkeni (base64, hex ya da parola),
-2. yapılandırmadaki anahtar dosyası,
-3. `~/.sentinel/vault.key` — ilk kullanımda `0600` izniyle üretilir.
+Encrypts risky files with AES-256-GCM and isolates them. **The original
+is deleted only after the encrypted copy has been decrypted again and
+its SHA-256 matched.**
 
-> **Anahtar kaybolursa karantinadaki dosyalar geri alınamaz.** Üretim
-> kullanımında `SENTINEL_VAULT_KEY`'i bir sır yöneticisinde tutun.
+```bash
+sentinel scan ~/Documents --quarantine --min-severity critical
+sentinel vault list                      # files in the vault
+sentinel vault verify                    # integrity check
+sentinel vault restore <file.enc>        # restore to the original location
+sentinel vault purge --all               # delete permanently
+sentinel vault migrate                   # move legacy quarantine directories
+```
+
+The vault key is taken from these sources, in order:
+
+1. the `SENTINEL_VAULT_KEY` environment variable (base64, hex or a
+   passphrase),
+2. the key file named in the configuration,
+3. `~/.sentinel/vault.key` - generated with `0600` permissions on first
+   use.
+
+> **If the key is lost, quarantined files cannot be recovered.** In
+> production, keep `SENTINEL_VAULT_KEY` in a secret manager.
 
 ---
 
-## CI entegrasyonu
+## CI integration
 
-### Çıkış kodları
+### Exit codes
 
-| Kod | Anlam |
+| Code | Meaning |
 |---|---|
-| `0` | Temiz, ya da `--fail-on` eşiğinin altında bulgu |
-| `1` | `--fail-on` eşiğinde veya üstünde bulgu var |
-| `2` | Çalıştırma hatası (hedef yok, geçersiz ayar) |
-| `130` | Kullanıcı iptal etti |
+| `0` | Clean, or findings below the `--fail-on` threshold |
+| `1` | Findings at or above the `--fail-on` threshold |
+| `2` | Execution error (missing target, invalid setting) |
+| `130` | Cancelled by the user |
 
-### GitHub Actions + Code Scanning
+### GitHub Actions and Code Scanning
 
-SARIF çıktısı, bulguları doğrudan pull request'in "Files changed"
-görünümüne ve **Security** sekmesine taşır:
+SARIF output puts findings directly into a pull request's "Files
+changed" view and the **Security** tab:
 
 ```yaml
 - run: pip install -e ".[docs]"
@@ -189,31 +193,31 @@ görünümüne ve **Security** sekmesine taşır:
     sarif_file: sentinel.sarif
 ```
 
-### Git pre-commit kancası
+### Git pre-commit hook
 
-Sır içeren bir commit'i daha gönderilmeden engeller:
+Blocks a commit that contains a secret before it is ever pushed:
 
 ```bash
-sentinel precommit --install     # .git/hooks/pre-commit yazar
-sentinel precommit               # elle çalıştır (staged dosyaları tarar)
+sentinel precommit --install     # writes .git/hooks/pre-commit
+sentinel precommit               # run by hand (scans staged files)
 ```
 
 ---
 
-## Yapılandırma
+## Configuration
 
 ```bash
-sentinel init     # örnek sentinel.yml oluşturur
+sentinel init     # creates an example sentinel.yml
 ```
 
-Ayarlar katmanlıdır; sağdaki soldakini ezer:
+Settings are layered; each level overrides the one to its left:
 
 ```
-varsayılan  <  sentinel.yml  <  SENTINEL_* ortam değişkenleri  <  CLI argümanları
+defaults  <  sentinel.yml  <  SENTINEL_* environment  <  CLI arguments
 ```
 
-`sentinel.yml` çalışma dizininden başlayarak üst dizinlerde aranır, yani
-alt klasörlerden çalıştırıldığında da bulunur.
+`sentinel.yml` is looked up from the working directory upwards, so it is
+found when you run from a subfolder too.
 
 ```yaml
 target: .
@@ -225,64 +229,66 @@ exclude_globs: ["*.min.js", "*.lock"]
 entropy_scan: true
 archive_enabled: true
 ocr: false
-workers: 0            # 0 = CPU sayısına göre otomatik
+workers: 0            # 0 = automatic, based on CPU count
 
-incremental: false    # değişmemiş dosyaları önbellekten geç
+incremental: false    # skip unchanged files via the cache
 # cache_path: .sentinel-cache.json
 
 allowlist:
   paths: ["tests/**", "test_data/**"]
   values: []
   rules: [PRIVATE_IP]
-  use_defaults: true  # AWS örnek anahtarı, example.com vb.
-  inline: true        # `sentinel:ignore` yorumları
+  use_defaults: true  # AWS example key, example.com, and so on
+  inline: true        # `sentinel:ignore` comments
 ```
 
-**Sırları yapılandırma dosyasına yazmayın**; ortam değişkeni kullanın:
+**Do not put secrets in the configuration file**; use environment
+variables:
 
-| Değişken | Açıklama |
+| Variable | Description |
 |---|---|
-| `SENTINEL_VAULT_KEY` | Karantina kasası anahtarı |
-| `SENTINEL_WEBHOOK_URL` | Discord / Slack / Teams bildirim adresi |
-| `SENTINEL_FINGERPRINT_SALT` | Parmak izi tuzu (kuruma özel korelasyon) |
-| `SENTINEL_WORKERS`, `SENTINEL_OCR`, `SENTINEL_MIN_SEVERITY` | Tarama ayarları |
-| `SENTINEL_INCREMENTAL`, `SENTINEL_CACHE_PATH` | Artımlı tarama |
+| `SENTINEL_VAULT_KEY` | Quarantine vault key |
+| `SENTINEL_WEBHOOK_URL` | Discord / Slack / Teams notification URL |
+| `SENTINEL_FINGERPRINT_SALT` | Fingerprint salt (organization-specific correlation) |
+| `SENTINEL_WORKERS`, `SENTINEL_OCR`, `SENTINEL_MIN_SEVERITY` | Scan settings |
+| `SENTINEL_INCREMENTAL`, `SENTINEL_CACHE_PATH` | Incremental scanning |
 
 ---
 
-## Yanlış pozitifle başa çıkma
+## Dealing with false positives
 
-Üç yol var; en dar olanı seçin.
+There are three ways; pick the narrowest one.
 
-**1. Satır içi** — tek bir satır için:
+**1. Inline** - for a single line:
 
 ```python
 TEST_KEY = "AKIAIOSFODNN7EXAMPLE"   # sentinel:ignore
-TEST_TC = "10000000146"             # sentinel:ignore=TC_KIMLIK
+TEST_ID = "10000000146"             # sentinel:ignore=TR_NATIONAL_ID
 ```
 
-**2. Allowlist** — tekrar eden bir yol ya da değer için (`sentinel.yml`).
+**2. Allowlist** - for a recurring path or value (`sentinel.yml`).
 
-**3. Baz çizgisi** — mevcut durumu dondurup yalnızca **yeni** sızıntıları
-raporlamak için. Eski borcu temizlemeden CI kapısını açmanın yolu:
+**3. Baseline** - to freeze the current state and report only **new**
+leaks. This is how you open the CI gate without first clearing the
+existing debt:
 
 ```bash
-sentinel scan . --write-baseline baseline.json   # bir kez
+sentinel scan . --write-baseline baseline.json   # once
 sentinel scan . --baseline baseline.json --fail-on high
 ```
 
 ---
 
-## Masaüstü arayüzü
+## Desktop interface
 
 ```bash
 pip install -e ".[gui]"
-sentinel-gui      # ya da: python gui_app.py
+sentinel-gui      # or: python gui_app.py
 ```
 
-Klasör seçimi, canlı ilerleme, durdurulabilir tarama, önem derecesine
-göre renkli bulgu listesi, risk dağılımı grafiği, karantina kasası
-yönetimi ve tek tuşla rapor kaydı.
+Folder selection, live progress, a cancellable scan, a findings list
+coloured by severity, a risk distribution chart, quarantine vault
+management, and one-click report saving.
 
 ---
 
@@ -291,88 +297,110 @@ yönetimi ve tek tuşla rapor kaydı.
 ```python
 from sentinel import ScanConfig, Scanner
 
-config = ScanConfig(target="veri", min_severity="high", workers=4)
-result = Scanner("veri", config=config).scan()
+config = ScanConfig(target="data", min_severity="high", workers=4)
+result = Scanner("data", config=config).scan()
 
 print(result.risk_score, "/100")
 for finding in result.findings:
     print(finding.severity, finding.type, finding.file, finding.content_masked)
 
-# Bulgu değil, kapatılacak iş kalemi: aynı değerin kopyaları tek grupta.
-print(len(result.findings), "bulgu /", result.unique_count, "tekil sır")
+# Not findings, but items of work: copies of one value share a group.
+print(len(result.findings), "findings /", result.unique_count, "unique secrets")
 for group in result.shared_secrets():
-    print(group.type, group.file_count, "dosyada", group.content_masked)
+    print(group.type, "in", group.file_count, "files", group.content_masked)
 ```
 
-`Finding` nesneleri **asla açık hassas veri taşımaz**: `content_masked`
-maskelenmiş değeri, `fingerprint` ise veriyi sızdırmadan korelasyon
-kurmaya yarayan HMAC-SHA256 kimliğini verir. `SecretGroup` aynı güvenceyi
-taşır — gruplama parmak izi üzerinden yapılır, değer hiç açılmaz.
+`Finding` objects **never carry cleartext sensitive data**:
+`content_masked` holds the masked value, and `fingerprint` gives an
+HMAC-SHA256 identity that supports correlation without leaking the data.
+`SecretGroup` carries the same guarantee - grouping runs on the
+fingerprint and the value is never revealed.
 
 ---
 
-## Geliştirme
+## Development
 
 ```bash
 pip install -e ".[dev,all]"
-pytest                    # 313 test
+pytest                    # 419 tests
 pytest --cov=sentinel
 ruff check .
 ```
 
-### Mimari
+### Architecture
 
 ```
 sentinel/
-  config.py        katmanlı yapılandırma (dosya → ortam → CLI)
-  severity.py      önem derecesi + risk skoru
-  patterns.py      desen kataloğu (regex + önem + doğrulayıcı bağı)
-  validators.py    TCKN · Luhn · IBAN · JWT · Base58Check
-  entropy.py       Shannon entropisi, generic sır adayları
-  redaction.py     maskeleme + HMAC parmak izi
-  allowlist.py     yanlış pozitif bastırma + baz çizgisi
-  matcher.py       metin → bulgu (doğrula, bastır, örtüşme çöz, tekilleştir)
-  correlation.py   bulgu → tekil sır (çapraz dosya gruplama)
-  cache.py         artımlı tarama önbelleği (geçersizleştirme kuralları dâhil)
+  config.py        layered configuration (file -> environment -> CLI)
+  severity.py      severity levels and the risk score
+  patterns.py      pattern catalogue (regex + severity + validator binding)
+  validators.py    national ID · Luhn · IBAN · JWT · Base58Check
+  entropy.py       Shannon entropy, generic secret candidates
+  redaction.py     masking and HMAC fingerprints
+  allowlist.py     false-positive suppression and baselines
+  matcher.py       text -> findings (validate, suppress, resolve overlaps, dedupe)
+  correlation.py   findings -> unique secrets (cross-file grouping)
+  cache.py         incremental scan cache (including invalidation rules)
   extractors/      plain · pdf · office · archive · image
-  engine.py        paralel tarama, akışlı okuma, iptal, ilerleme
-  quarantine.py    AES-256-GCM kasa (eski formatı da okur)
-  yara_engine.py   rules/*.yar motoru
-  notify.py        webhook bildirimleri
-  monitor.py       gerçek zamanlı izleme
+  engine.py        parallel scanning, streaming reads, cancellation, progress
+  quarantine.py    AES-256-GCM vault (reads the legacy format too)
+  yara_engine.py   the rules/*.yar engine
+  notify.py        webhook notifications
+  monitor.py       real-time monitoring
   reporting/       html · csv · json · sarif · markdown · pdf
   cli.py           scan · watch · vault · rules · precommit · init · doctor
 ```
 
-Yeni kural eklemek: `sentinel/patterns.py` içindeki kataloğa bir
-`PatternDef` ekleyin — önem derecesi, açıklama, varsa doğrulayıcı adı ve
-bir `example`. Testler örneğin kendi regex'ine uyduğunu otomatik denetler.
+To add a rule: append a `PatternDef` to the catalogue in
+`sentinel/patterns.py` - severity, description, a validator name where
+one applies, and an `example`. The tests automatically check that the
+example matches its own regex.
 
-### Eskiye uyumluluk
+### Detection rules and language
 
-- `scan_results.csv` sütun düzeni korunur; yeni alanlar sona eklenir.
-- `Scanner(target).start_scan_parallel()` ve `get_patterns()` çalışmaya
-  devam eder.
-- Karantina kasası v3.0'ın base64 formatındaki dosyalarını ve
-  `.enc.meta` / `karantina_kayitlari.json` kayıtlarını okur.
-- `python main.py --target test_data` eski çağrı biçimi geçerlidir.
+Rule *names* and all documentation are English. Some rules deliberately
+contain Turkish keywords in their regexes - the health-data indicators,
+the credential names `sifre` and `parola`, the table names in the
+database-dump YARA rule. Those are detection data, not leftover prose:
+this scanner targets Turkish records and codebases, where secrets are
+routinely named in Turkish. Removing them would blind the rules on their
+main audience, the same way removing the national-ID validator would.
+
+### Backward compatibility
+
+- The `scan_results.csv` column order is preserved; new fields are
+  appended at the end.
+- `Scanner(target).start_scan_parallel()` and `get_patterns()` keep
+  working.
+- The quarantine vault still reads v3.0's base64 files and its
+  `.enc.meta` / `karantina_kayitlari.json` records.
+- The legacy `python main.py --target test_data` invocation is valid.
+- Six rules were renamed from Turkish to English identifiers
+  (`TC_KIMLIK` → `TR_NATIONAL_ID`, `KREDI_KARTI` → `CREDIT_CARD`,
+  `TELEFON` → `TR_PHONE`, `TR_PLAKA` → `TR_PLATE`, `DOGUM_TARIHI` →
+  `DATE_OF_BIRTH`, `SAGLIK_VERISI` → `HEALTH_DATA`). The old names are
+  still accepted in allowlists, `--only`/`--skip-rules`, and inline
+  `sentinel:ignore` comments. **Baselines must be regenerated**: a
+  fingerprint is derived from `rule:value`, so renaming a rule changes
+  it.
 
 ---
 
-## Yol haritası
+## Roadmap
 
-Kapatılan kusurların teşhisi ve sıradaki işler: [ROADMAP.md](ROADMAP.md).
+Diagnosis of the defects that were closed, and what is next:
+[ROADMAP.md](ROADMAP.md).
 
-## Uyarı
+## Warning
 
-Sentinel **hassas veri işler**. Ürettiği raporlar maskelenmiş olsa bile
-nerede ne bulunduğunu gösterir; rapor dosyalarını da gizli kabul edin.
-Karantina özelliği dosyaları **taşır ve orijinallerini siler** — önce
-`--min-severity critical` gibi dar bir eşikle ve yedeği olan bir dizinde
-deneyin.
+Sentinel **handles sensitive data**. Even though its reports are masked,
+they show where things were found; treat the report files as
+confidential too. The quarantine feature **moves files and deletes the
+originals** - try it first with a narrow threshold such as
+`--min-severity critical`, in a directory you have backed up.
 
-Yalnızca **yetkili olduğunuz** sistemlerde kullanın.
+Use it only on systems you are **authorized** to scan.
 
-## Lisans
+## License
 
-MIT — bkz. [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).

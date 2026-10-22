@@ -1,14 +1,14 @@
 """HTML panosu (dashboard).
 
-**Düzeltilen güvenlik açığı:** v3.0'ın `reporter.py`'si dosya yollarını ve
-bulgu içeriğini f-string ile doğrudan HTML'e basıyordu. `<script>` içeren
-bir dosya adı raporu silahlandırabiliyordu (HTML/JS injection) — hem de
-raporu açan kişi tam olarak güvenlik analistiydi. Burada şablon Jinja2
-ile ``autoescape=True`` olarak işlenir; kaçış yapısal olarak garanti
-altındadır, programcı disiplinine bırakılmaz.
+**Security defect fixed:** the v3.0 `reporter.py` wrote file paths and
+finding content straight into HTML with f-strings. A filename containing
+`<script>` could weaponise the report (HTML/JS injection) - against the
+security analyst opening it, no less. Here the template is rendered by
+Jinja2 with ``autoescape=True``; escaping is guaranteed structurally
+rather than left to programmer discipline.
 
-Rapor tek dosyadır: dış CSS/JS/font yok. Çevrimdışı bir olay müdahale
-makinesinde de, e-posta ekinde de aynı görünür.
+The report is a single file: no external CSS, JS or fonts. It looks the
+same on an offline incident-response machine and as an email attachment.
 """
 
 from __future__ import annotations
@@ -20,38 +20,39 @@ from sentinel.severity import Severity
 
 __all__ = ["write", "render", "generate_html_report"]
 
-#: Tabloya basılacak en fazla satır — 200 bin satırlık HTML tarayıcıyı kilitler.
+#: Maximum table rows; a 200k-row HTML page locks up the browser.
 MAX_TABLE_ROWS = 2000
 
-#: Tür grafiğinde gösterilecek en fazla kategori; kalanı "Diğer"e katlanır.
+#: Maximum categories in the type chart; the rest fold into "Other".
 MAX_TYPE_BARS = 8
 
-#: "Yayılmış sırlar" bölümünde gösterilecek en fazla satır ve satır başına
-#: en fazla dosya adı. Bir sır 10.000 dosyada geçiyorsa hepsini basmanın
-#: faydası yok; sayı + örnek yol analiste yeter (tam liste JSON raporunda).
+#: Maximum rows in the "spread secrets" section, and the maximum number
+#: of filenames per row. If a secret occurs in 10,000 files, printing
+#: them all helps nobody; the count plus a sample is enough for the
+#: analyst (the full list is in the JSON report).
 MAX_GROUP_ROWS = 50
 MAX_GROUP_FILES = 4
 
 
 def _relative(path: str, base: str) -> str:
-    """Yolu hedefe göre kısaltır.
+    """Shorten a path relative to the scan target.
 
-    Özet bloğunda yedi dosyanın mutlak yolunu yan yana basmak, satırı
-    dolduran bir gürültü duvarı üretiyor ve asıl bilgiyi (hangi dosyalar)
-    gizliyordu. Hedefin dışındaki yollar olduğu gibi bırakılır — kısaltma
-    uğruna yanlış yer gösterilmez.
+    Printing seven absolute paths side by side in the summary block
+    produced a wall of noise that filled the row and hid the actual
+    information (which files). Paths outside the target are left as they
+    are - shortening must never point at the wrong place.
     """
     if not base:
         return path
     try:
         relative = os.path.relpath(path, base)
-    except ValueError:  # Windows: farklı sürücüler
+    except ValueError:  # Windows: different drives
         return path
     return path if relative.startswith("..") else relative
 
 
 def _severity_rows(result):
-    """Önem derecesi dağılımı (yüksekten düşüğe, sıfır olanlar atılır)."""
+    """Severity distribution (high to low, zero counts dropped)."""
     counts = result.counts_by_severity()
     total = sum(counts.values()) or 1
     rows = []
@@ -62,7 +63,7 @@ def _severity_rows(result):
         rows.append(
             {
                 "key": severity.value,
-                "label": severity.label_tr,
+                "label": severity.label,
                 "icon": severity.icon,
                 "count": count,
                 "percent": round(100 * count / total, 1),
@@ -72,16 +73,16 @@ def _severity_rows(result):
 
 
 def _type_rows(result):
-    """Tür dağılımı: en çok görülen ilk sekiz, kalanı 'Diğer'.
+    """Type distribution: the top eight, the rest folded into 'Other'.
 
-    Dokuzuncu kategori için yeni bir renk üretmek yerine katlama yapılır;
-    tek seri olduğu için tüm çubuklar aynı rengi kullanır.
+    Folding beats inventing a ninth colour; this is a single series, so
+    every bar uses the same colour.
     """
     counts = result.counts_by_type()
     items = list(counts.items())
     head, tail = items[:MAX_TYPE_BARS], items[MAX_TYPE_BARS:]
     if tail:
-        head.append(("Diğer", sum(count for _, count in tail)))
+        head.append(("Other", sum(count for _, count in tail)))
     maximum = max((count for _, count in head), default=1) or 1
     return [
         {
@@ -109,15 +110,15 @@ def _context(result, title: str) -> dict:
         "files_scanned": result.files_scanned,
         "files_cached": result.files_cached,
         "files_affected": len({f.source for f in findings}),
-        # Tekil sır sayısı bulgu sayısından çok daha anlamlı: aynı
-        # anahtarın 40 kopyası tek bir iptalle kapanır.
+        # The unique-secret count says far more than the finding count:
+        # 40 copies of one key close with a single revocation.
         "unique_total": result.unique_count,
         "shared_groups": [
             {
                 "type": group.type,
                 "title": group.title or group.type,
                 "severity": group.severity,
-                "severity_label": group.severity_enum.label_tr,
+                "severity_label": group.severity_enum.label,
                 "masked": group.content_masked,
                 "count": group.count,
                 "file_count": group.file_count,
@@ -143,7 +144,7 @@ def _context(result, title: str) -> dict:
                 "type": finding.type,
                 "title": finding.title or finding.type,
                 "severity": finding.severity,
-                "severity_label": finding.severity_enum.label_tr,
+                "severity_label": finding.severity_enum.label,
                 "severity_icon": finding.severity_enum.icon,
                 "masked": finding.content_masked,
                 "snippet": finding.snippet,
@@ -159,22 +160,22 @@ def _context(result, title: str) -> dict:
     }
 
 
-def render(result, title: str = "Sentinel — Hassas Veri Keşif Raporu") -> str:
-    """Raporu HTML dizgesi olarak üretir."""
+def render(result, title: str = "Sentinel - Sensitive Data Discovery Report") -> str:
+    """Render the report as an HTML string."""
     try:
         from jinja2 import Environment
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "HTML raporu için Jinja2 gerekli: pip install jinja2"
+            "The HTML report requires Jinja2: pip install jinja2"
         ) from exc
 
-    # autoescape=True: enjeksiyon sınıfını yapısal olarak kapatır.
+    # autoescape=True closes the injection class structurally.
     environment = Environment(autoescape=True, trim_blocks=True, lstrip_blocks=True)
     template = environment.from_string(_TEMPLATE)
     return template.render(**_context(result, title))
 
 
-def write(result, output_path: str, title: str = "Sentinel — Hassas Veri Keşif Raporu") -> str:
+def write(result, output_path: str, title: str = "Sentinel - Sensitive Data Discovery Report") -> str:
     directory = os.path.dirname(os.path.abspath(output_path))
     if directory:
         os.makedirs(directory, exist_ok=True)
@@ -184,10 +185,10 @@ def write(result, output_path: str, title: str = "Sentinel — Hassas Veri Keşi
 
 
 def generate_html_report(results, output_file: str = "dashboard.html"):
-    """Eski API uyumluluğu: sözlük listesi kabul eder.
+    """Legacy API compatibility: accepts a list of dicts.
 
-    v3.0'daki ``generate_html_report(results, path)`` çağrıları kırılmasın
-    diye korunmuştur.
+    Kept so ``generate_html_report(results, path)`` calls from v3.0 do
+    not break.
     """
     from sentinel.engine import ScanResult
     from sentinel.findings import Finding
@@ -204,18 +205,18 @@ def generate_html_report(results, output_file: str = "dashboard.html"):
 
 
 # ---------------------------------------------------------------------------
-# Şablon
+# Template
 # ---------------------------------------------------------------------------
-# Renk rolleri `:root` üzerinde token olarak tanımlanır; koyu değerler hem
-# `prefers-color-scheme` hem `data-theme` kapsamında verilir, böylece hem
-# işletim sistemi ayarı hem de sayfadaki tema düğmesi çalışır.
+# Colour roles are defined as tokens on `:root`; the dark values are
+# given under both `prefers-color-scheme` and `data-theme`, so the
+# operating-system setting and the in-page theme button both work.
 #
-# Önem derecesi renkleri **durum (status) paleti**dir ve asla kategorik
-# seri rengi olarak kullanılmaz; her zaman ikon + etiketle birlikte
-# gider, çünkü renk tek başına anlam taşımamalıdır.
+# Severity colours are a **status palette** and are never used as
+# categorical series colours; they always travel with an icon and a
+# label, because colour must not carry meaning on its own.
 _TEMPLATE = """\
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -291,7 +292,7 @@ button.theme {
 }
 button.theme:hover { color: var(--text-primary); }
 
-/* --- Durum tileları: sayı grafiğin kendisidir --- */
+/* --- Status tiles: the number is the chart --- */
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   margin-bottom: 24px; }
 .tile { background: var(--surface-1); border: 1px solid var(--border);
@@ -304,7 +305,7 @@ button.theme:hover { color: var(--text-primary); }
 .tile.risk .value { color: var(--sev-critical); }
 .tile.ok .value { color: var(--sev-low); }
 
-/* --- Filtre satırı: kapsadığı her şeyin üstünde, tek sıra --- */
+/* --- Filter row: one line, above everything it governs --- */
 .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 12px; padding: 12px 14px; margin-bottom: 20px; }
@@ -323,9 +324,9 @@ button.theme:hover { color: var(--text-primary); }
 .panel h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
 .panel p.hint { margin: 0 0 16px; font-size: 12px; color: var(--text-muted); }
 
-/* --- Yayılmış sırlar: tek işle kapanan kopya kümeleri ---
-   Tablo değil liste: 390 px'te bir tablonun değer sütunu kırpılıyordu,
-   akan bir liste her genişlikte kendini toplar. */
+/* --- Spread secrets: copy sets that close with one action ---
+   A list, not a table: at 390px a table clipped the value column,
+   while a flowing list reflows at any width. */
 .panel.spread { margin-bottom: 24px; }
 .spread-list { list-style: none; margin: 0; padding: 0;
   display: flex; flex-direction: column; gap: 14px; }
@@ -337,7 +338,7 @@ button.theme:hover { color: var(--text-primary); }
 .spread-head .n { margin-left: auto; font-size: 12px; color: var(--text-muted);
   font-variant-numeric: tabular-nums; }
 
-/* --- Önem derecesi: yığılmış tek çubuk, aralarda 2px yüzey boşluğu --- */
+/* --- Severity: one stacked bar, 2px of surface between segments --- */
 .stack { display: flex; gap: 2px; height: 10px; margin-bottom: 14px; }
 .stack div { border-radius: 2px; min-width: 3px; }
 .stack div:first-child { border-radius: 4px 2px 2px 4px; }
@@ -353,7 +354,7 @@ button.theme:hover { color: var(--text-primary); }
 .legend-row .pct { color: var(--text-muted); font-size: 12px;
   font-variant-numeric: tabular-nums; width: 46px; text-align: right; }
 
-/* --- Tür dağılımı: tek seri, tek renk; değer çubuğun ucunda --- */
+/* --- Type distribution: one series, one colour; value at the bar end --- */
 .bars { display: flex; flex-direction: column; gap: 11px; }
 .bar-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
 .bar-head { display: flex; justify-content: space-between; align-items: baseline;
@@ -375,7 +376,7 @@ button.theme:hover { color: var(--text-primary); }
 .sev-low .dot { background: var(--sev-low); }
 .sev-info .dot { background: var(--sev-info); }
 
-/* --- Tablo: her değerin okunabildiği asıl görünüm --- */
+/* --- Table: the real view, where every value is readable --- */
 .table-wrap { background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -427,51 +428,51 @@ details.errors li { word-break: break-all; }
   <div>
     <h1>{{ title }}</h1>
     <p class="meta">
-      {{ generated_at }} · hedef <code>{{ target }}</code> ·
-      {{ duration }} sn · {{ files_scanned }} dosya tarandı{% if files_cached %}
-      ({{ files_cached }}'i önbellekten){% endif %}
+      {{ generated_at }} · target <code>{{ target }}</code> ·
+      {{ duration }} s · {{ files_scanned }} files scanned{% if files_cached %}
+      ({{ files_cached }} from cache){% endif %}
     </p>
   </div>
   <button class="theme" type="button" id="themeToggle"
-          aria-label="Açık/koyu temayı değiştir">◐ Tema</button>
+          aria-label="Toggle light and dark theme">◐ Theme</button>
 </header>
 
 {% if cancelled %}
-<div class="note">Bu tarama tamamlanmadan durduruldu; sonuçlar kısmi olabilir.</div>
+<div class="note">This scan was stopped before it finished; results may be partial.</div>
 {% endif %}
 
-<section class="tiles" aria-label="Özet">
+<section class="tiles" aria-label="Summary">
   <div class="tile risk">
-    <h3>Risk Skoru</h3>
+    <h3>Risk Score</h3>
     <div class="value">{{ risk_score }}<span class="unit"> / 100</span></div>
   </div>
   <div class="tile{% if total == 0 %} ok{% endif %}">
-    <h3>Toplam Bulgu</h3>
+    <h3>Total Findings</h3>
     <div class="value">{{ total }}</div>
   </div>
   <div class="tile{% if total == 0 %} ok{% endif %}">
-    <h3>Tekil Sır</h3>
+    <h3>Unique Secrets</h3>
     <div class="value">{{ unique_total }}</div>
   </div>
   <div class="tile">
-    <h3>Kritik + Yüksek</h3>
+    <h3>Critical + High</h3>
     <div class="value">{{ critical + high }}</div>
   </div>
   <div class="tile">
-    <h3>Etkilenen Dosya</h3>
+    <h3>Files Affected</h3>
     <div class="value">{{ files_affected }}</div>
   </div>
 </section>
 
 {% if shared_groups %}
 <section class="panel spread" aria-labelledby="spread-h">
-  <h2 id="spread-h">Birden fazla dosyaya kopyalanmış sırlar</h2>
+  <h2 id="spread-h">Secrets copied into more than one file</h2>
   <p class="hint">
-    Aynı değerin her kopyası ayrı bir bulgu olarak sayılır, ama hepsi
-    <strong>tek bir işle</strong> kapanır: anahtarı iptal et ya da veriyi
-    kaldır. Eşleştirme parmak izi (HMAC-SHA256) üzerinden yapılır; değerin
-    kendisi hiçbir yerde açılmaz. Yollar hedefe görelidir; tam liste JSON
-    raporunda.
+    Every copy of a value counts as its own finding, but all of them
+    close with <strong>one action</strong>: revoke the key or remove the
+    data. Matching runs on the fingerprint (HMAC-SHA256); the value
+    itself is never revealed. Paths are relative to the target; the full
+    list is in the JSON report.
   </p>
   <ul class="spread-list">
     {% for group in shared_groups %}
@@ -481,11 +482,11 @@ details.errors li { word-break: break-all; }
           <span class="dot"></span>{{ group.severity_label }}
         </span>
         <strong class="type">{{ group.type }}</strong>
-        <span class="n">{{ group.file_count }} dosya · {{ group.count }} bulgu</span>
+        <span class="n">{{ group.file_count }} files · {{ group.count }} findings</span>
       </div>
       <code class="masked">{{ group.masked }}</code>
       <span class="snippet">{{ group.files|join(' · ') }}{% if group.more_files %}
-        … +{{ group.more_files }} dosya{% endif %}</span>
+        … +{{ group.more_files }} files{% endif %}</span>
     </li>
     {% endfor %}
   </ul>
@@ -495,13 +496,13 @@ details.errors li { word-break: break-all; }
 {% if findings %}
 <section class="panels">
   <div class="panel">
-    <h2>Önem Derecesi Dağılımı</h2>
-    <p class="hint">Durum renkleri ikon ve etiketle birlikte verilir.</p>
+    <h2>Severity Distribution</h2>
+    <p class="hint">Status colours always travel with an icon and a label.</p>
     <div class="stack" role="img"
-         aria-label="Önem derecesine göre bulgu dağılımı">
+         aria-label="Finding distribution by severity">
       {% for row in severity_rows %}
       <div style="width: {{ row.percent }}%; background: var(--sev-{{ row.key }});"
-           title="{{ row.label }}: {{ row.count }} bulgu ({{ row.percent }}%)"></div>
+           title="{{ row.label }}: {{ row.count }} findings ({{ row.percent }}%)"></div>
       {% endfor %}
     </div>
     <div class="legend">
@@ -518,8 +519,8 @@ details.errors li { word-break: break-all; }
   </div>
 
   <div class="panel">
-    <h2>Veri Türüne Göre Bulgular</h2>
-    <p class="hint">En çok görülen {{ type_rows|length }} tür; tek seri, tek renk.</p>
+    <h2>Findings by Data Type</h2>
+    <p class="hint">The {{ type_rows|length }} most common types; one series, one colour.</p>
     <div class="bars">
       {% for row in type_rows %}
       <div class="bar-row">
@@ -529,7 +530,7 @@ details.errors li { word-break: break-all; }
         </div>
         <div class="bar-track">
           <div class="bar-fill" style="width: {{ row.percent }}%;"
-               title="{{ row.label }}: {{ row.count }} bulgu"></div>
+               title="{{ row.label }}: {{ row.count }} findings"></div>
         </div>
       </div>
       {% endfor %}
@@ -538,32 +539,32 @@ details.errors li { word-break: break-all; }
 </section>
 
 <div class="filters">
-  <input type="search" id="q" placeholder="Dosya, tür veya içerikte ara…"
+  <input type="search" id="q" placeholder="Search file, type or content…"
          aria-label="Bulgularda ara">
-  <select id="sev" aria-label="Önem derecesine göre filtrele">
-    <option value="">Tüm önem dereceleri</option>
+  <select id="sev" aria-label="Filter by severity">
+    <option value="">All severities</option>
     {% for value in severity_order %}
     <option value="{{ value }}">{{ value }}</option>
     {% endfor %}
   </select>
-  <select id="typ" aria-label="Veri türüne göre filtrele">
-    <option value="">Tüm türler</option>
+  <select id="typ" aria-label="Filter by data type">
+    <option value="">All types</option>
     {% for value in types %}
     <option value="{{ value }}">{{ value }}</option>
     {% endfor %}
   </select>
-  <span class="count" id="count">{{ findings|length }} satır</span>
+  <span class="count" id="count">{{ findings|length }} rows</span>
 </div>
 
 <div class="table-wrap">
 <table id="tbl">
   <thead>
     <tr>
-      <th scope="col">Önem</th>
-      <th scope="col">Tür</th>
-      <th scope="col">Konum</th>
-      <th scope="col">Satır</th>
-      <th scope="col">İçerik (maskeli)</th>
+      <th scope="col">Severity</th>
+      <th scope="col">Type</th>
+      <th scope="col">Location</th>
+      <th scope="col">Line</th>
+      <th scope="col">Content (masked)</th>
     </tr>
   </thead>
   <tbody>
@@ -577,7 +578,7 @@ details.errors li { word-break: break-all; }
       </td>
       <td>
         <strong>{{ item.type }}</strong>
-        {% if not item.validated %}<span class="tag">doğrulanmadı</span>{% endif %}
+        {% if not item.validated %}<span class="tag">not validated</span>{% endif %}
         <span class="snippet">{{ item.title }}</span>
       </td>
       <td class="path">{{ item.file }}</td>
@@ -594,23 +595,23 @@ details.errors li { word-break: break-all; }
 
 {% if truncated %}
 <div class="note" style="margin-top:20px">
-  Tabloda ilk {{ findings|length }} bulgu gösteriliyor; {{ truncated }} bulgu daha var.
-  Tamamı için CSV ya da JSON raporunu kullanın.
+  The table shows the first {{ findings|length }} findings; {{ truncated }} more exist.
+  Use the CSV or JSON report for the full list.
 </div>
 {% endif %}
 
 {% else %}
 <div class="table-wrap">
   <div class="empty">
-    <div class="big">Sızıntı tespit edilmedi</div>
-    <div>{{ files_scanned }} dosya tarandı, eşik üstü hassas veri bulunamadı.</div>
+    <div class="big">No leaks detected</div>
+    <div>{{ files_scanned }} files scanned; no sensitive data at or above the threshold.</div>
   </div>
 </div>
 {% endif %}
 
 {% if error_count %}
 <details class="errors">
-  <summary>{{ error_count }} dosya okunamadı</summary>
+  <summary>{{ error_count }} files could not be read</summary>
   <ul>
     {% for item in errors %}
     <li><code>{{ item.file }}</code> — {{ item.error }}</li>
@@ -620,7 +621,7 @@ details.errors li { word-break: break-all; }
 {% endif %}
 
 <footer>
-  Sentinel DLP tarafından otomatik üretildi · tüm hassas değerler maskelenmiştir
+  Generated automatically by Sentinel DLP · all sensitive values are masked
 </footer>
 </div>
 
@@ -663,7 +664,7 @@ details.errors li { word-break: break-all; }
       row.hidden = !ok;
       if (ok) { shown++; }
     }
-    label.textContent = shown + ' / ' + rows.length + ' satır';
+    label.textContent = shown + ' / ' + rows.length + ' rows';
   }
 
   q.addEventListener('input', apply);

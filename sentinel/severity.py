@@ -1,8 +1,9 @@
-"""Önem derecesi (severity) ve risk skoru.
+"""Severity levels and the aggregate risk score.
 
-Eski sürümde her bulgu eşit ağırlıktaydı; 500 e-posta adresi ile 1 AWS
-anahtarı aynı listede yan yana duruyordu. Burada her desene bir kademe
-atanır ve rapora sıralanabilir bir risk skoru çıkar.
+In the previous version every finding carried equal weight: 500 email
+addresses and one AWS key sat side by side in the same flat list. Here
+each pattern is assigned a level, and the report gains a sortable risk
+score.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ __all__ = ["Severity", "risk_score", "SEVERITY_ORDER"]
 
 
 class Severity(str, Enum):
-    """Bulgu önem derecesi. Sıralama için :attr:`rank` kullanılır."""
+    """Finding severity. Use :attr:`rank` for ordering."""
 
     INFO = "info"
     LOW = "low"
@@ -23,23 +24,23 @@ class Severity(str, Enum):
 
     @property
     def rank(self) -> int:
-        # Sıralama anahtarı olarak satır başına birkaç kez çağrılır;
-        # `list.index` (O(n)) yerine sabit zamanlı sözlük araması.
+        # Called several times per line as a sort key, so this is a
+        # constant-time dict lookup rather than `list.index` (O(n)).
         return _RANKS[self.value]
 
     @property
-    def label_tr(self) -> str:
+    def label(self) -> str:
         return {
-            "info": "Bilgi",
-            "low": "Düşük",
-            "medium": "Orta",
-            "high": "Yüksek",
-            "critical": "Kritik",
+            "info": "Info",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High",
+            "critical": "Critical",
         }[self.value]
 
     @property
     def icon(self) -> str:
-        """Renk tek başına anlam taşımasın diye ikon + etiket birlikte gider."""
+        """Icon plus label, so colour never carries meaning on its own."""
         return {
             "info": "·",
             "low": "○",
@@ -57,7 +58,7 @@ class Severity(str, Enum):
         except ValueError as exc:
             valid = ", ".join(s.value for s in cls)
             raise ValueError(
-                f"Geçersiz önem derecesi: {value!r}. Geçerli değerler: {valid}"
+                f"Invalid severity: {value!r}. Valid values: {valid}"
             ) from exc
 
     def __ge__(self, other):  # type: ignore[override]
@@ -84,8 +85,8 @@ class Severity(str, Enum):
 SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"]
 _RANKS = {value: index for index, value in enumerate(SEVERITY_ORDER)}
 
-# Risk skoru ağırlıkları. Doğrulanmış (algoritmik olarak geçerli) bir bulgu
-# ham regex eşleşmesinden daha ağır sayılır.
+# Risk score weights. A validated finding (one that passed an algorithmic
+# check) counts for more than a raw regex match.
 _WEIGHTS = {
     Severity.INFO: 1,
     Severity.LOW: 3,
@@ -96,10 +97,10 @@ _WEIGHTS = {
 
 
 def risk_score(findings) -> int:
-    """Bulgu listesinden 0-100 arası toplu risk skoru üretir.
+    """Produce an aggregate 0-100 risk score from a list of findings.
 
-    Doğrusal toplam yerine logaritmik doyum kullanılır: tek bir kritik sır,
-    yüzlerce düşük önemli e-postadan daha yüksek skor vermelidir.
+    Logarithmic saturation rather than a linear sum: a single critical
+    secret must outrank hundreds of low-severity email addresses.
     """
     import math
 
@@ -113,6 +114,6 @@ def risk_score(findings) -> int:
 
     if total <= 0:
         return 0
-    # 100 puanlık ağırlık ~ 70 skor; doygunluk 100'de.
+    # ~100 points of weight maps to a score of ~70; saturates at 100.
     score = 100 * (1 - math.exp(-total / 120))
     return int(min(100, round(score)))

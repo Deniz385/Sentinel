@@ -1,7 +1,7 @@
-"""Tarama motoru testleri (uçtan uca).
+"""Scan engine tests (end to end).
 
-Özellikle v3.0'ın üç yanlış vaadi burada sınanır: paralellik, hash'in
-dosya başına **bir kez** hesaplanması ve iptal edilebilirlik.
+Three of v3.0's false promises are tested here in particular:
+parallelism, hashing **once** per file, and cancellability.
 """
 
 from __future__ import annotations
@@ -21,10 +21,10 @@ from tests.conftest import INVALID_TCKN, VALID_TCKN, VALID_VISA
 def sample_tree(tree):
     return tree(
         {
-            "musteriler.txt": f"TC: {VALID_TCKN}\nHatali: {INVALID_TCKN}\n",
-            "odeme.csv": f"kart,tutar\n{VALID_VISA},100\n",
-            "temiz.txt": "Burada hassas veri yok.\n",
-            "alt/klasor/notlar.txt": "mail: deniz@adu.edu.tr\n",
+            "musteriler.txt": f"ID: {VALID_TCKN}\nHatali: {INVALID_TCKN}\n",
+            "payments.csv": f"card,amount\n{VALID_VISA},100\n",
+            "clean.txt": "No sensitive data here.\n",
+            "sub/folder/notes.txt": "mail: jane.doe@university.edu\n",
             "resim.bin": b"\x00\x01binary",
             "bos.txt": "",
         }
@@ -47,15 +47,15 @@ class TestScanResults:
     def test_finds_expected_types(self, sample_tree):
         result = run(sample_tree)
         types = {finding.type for finding in result.findings}
-        assert "TC_KIMLIK" in types
-        assert "KREDI_KARTI" in types
+        assert "TR_NATIONAL_ID" in types
+        assert "CREDIT_CARD" in types
         assert "EMAIL" in types
 
     def test_invalid_values_are_not_reported(self, sample_tree):
         result = run(sample_tree)
         assert all(INVALID_TCKN not in f.content_masked for f in result.findings)
-        tckn_findings = [f for f in result.findings if f.type == "TC_KIMLIK"]
-        assert len(tckn_findings) == 1  # geçersiz olan elendi
+        tckn_findings = [f for f in result.findings if f.type == "TR_NATIONAL_ID"]
+        assert len(tckn_findings) == 1  # the invalid one was rejected
 
     def test_counts_and_summary(self, sample_tree):
         result = run(sample_tree)
@@ -76,12 +76,12 @@ class TestScanResults:
         assert result.files_skipped >= 1  # bos.txt
 
     def test_clean_tree_reports_nothing(self, tree):
-        result = run(tree({"a.txt": "tamamen temiz icerik\n"}))
+        result = run(tree({"a.txt": "entirely clean content\n"}))
         assert result.findings == []
         assert result.risk_score == 0
 
     def test_single_file_target(self, tree):
-        path = tree({"a.txt": f"TC: {VALID_TCKN}\n"}) / "a.txt"
+        path = tree({"a.txt": f"ID: {VALID_TCKN}\n"}) / "a.txt"
         result = run(path)
         assert len(result.findings) == 1
 
@@ -94,18 +94,18 @@ class TestHashing:
     def test_hash_matches_hashlib(self, tree):
         import hashlib
 
-        path = tree({"a.txt": "icerik"}) / "a.txt"
-        expected = hashlib.sha256(b"icerik").hexdigest()
+        path = tree({"a.txt": "content"}) / "a.txt"
+        expected = hashlib.sha256(b"content").hexdigest()
         assert calculate_file_hash(str(path)) == expected
 
     def test_hash_is_computed_once_per_file(self, tree, monkeypatch):
-        """v3.0 her bulgu için yeniden hash alıyordu (50 MB × 1000 bulgu)."""
+        """v3.0 rehashed for every finding (50 MB x 1000 findings)."""
         import sentinel.engine as engine
 
-        path = tree({"a.txt": "\n".join([f"TC: {VALID_TCKN}"] * 1)}) / "a.txt"
-        # Aynı dosyada beş farklı bulgu üretelim.
+        path = tree({"a.txt": "\n".join([f"ID: {VALID_TCKN}"] * 1)}) / "a.txt"
+        # Produce five different findings in one file.
         path.write_text(
-            f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\nmail: a@adu.edu.tr\n"
+            f"ID: {VALID_TCKN}\nCard: {VALID_VISA}\nmail: a@university.edu\n"
             "AKIAIOSFODNN7EXAMPLX\n-----BEGIN RSA PRIVATE KEY-----\n",
             encoding="utf-8",
         )
@@ -126,11 +126,11 @@ class TestHashing:
             ),
         )
         assert len(report.findings) >= 4
-        assert len(calls) == 1, f"hash {len(calls)} kez hesaplandı, 1 olmalı"
+        assert len(calls) == 1, f"hash computed {len(calls)} times, expected 1"
 
     def test_all_findings_share_the_file_hash(self, tree):
         path = (
-            tree({"a.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n"}) / "a.txt"
+            tree({"a.txt": f"ID: {VALID_TCKN}\nKart: {VALID_VISA}\n"}) / "a.txt"
         )
         result = run(path)
         hashes = {f.sha256 for f in result.findings}
@@ -142,9 +142,9 @@ class TestTargetSelection:
     def test_excluded_dirs_are_not_walked(self, tree):
         root = tree(
             {
-                "a.txt": f"TC: {VALID_TCKN}",
-                "node_modules/paket/b.txt": f"TC: {VALID_TCKN}",
-                ".git/config": f"TC: {VALID_TCKN}",
+                "a.txt": f"ID: {VALID_TCKN}",
+                "node_modules/paket/b.txt": f"ID: {VALID_TCKN}",
+                ".git/config": f"ID: {VALID_TCKN}",
             }
         )
         result = run(root)
@@ -152,37 +152,37 @@ class TestTargetSelection:
         assert all(".git" not in f.file for f in result.findings)
 
     def test_exclude_glob(self, tree):
-        root = tree({"a.txt": f"TC: {VALID_TCKN}", "b.min.js": f"TC: {VALID_TCKN}"})
+        root = tree({"a.txt": f"ID: {VALID_TCKN}", "b.min.js": f"ID: {VALID_TCKN}"})
         result = run(root, exclude_globs=("*.min.js",))
         assert all("min.js" not in f.file for f in result.findings)
 
     @pytest.mark.parametrize("pattern", ["tests/*", "tests/**", "tests", "./tests/*"])
     def test_relative_exclude_works_on_absolute_targets(self, tree, pattern):
-        """`--exclude tests/*` sessizce etkisiz kalmamalı.
+        """`--exclude tests/*` must not silently do nothing.
 
-        Kullanıcı kalıbı depo köküne göre yazar ama taranan yol mutlaktır;
-        düz `fnmatch` hiçbir şey eşleştirmez ve dosyalar dışlandı
-        sanılırken taranmaya devam eder.
+        Users write the pattern relative to the repository root while the
+        scanned path is absolute; plain `fnmatch` then matches nothing and
+        the files keep being scanned while appearing excluded.
         """
         root = tree(
-            {"src/a.txt": f"TC: {VALID_TCKN}", "tests/b.txt": f"TC: {VALID_TCKN}"}
+            {"src/a.txt": f"ID: {VALID_TCKN}", "tests/b.txt": f"ID: {VALID_TCKN}"}
         )
         result = run(root, exclude_globs=(pattern,))
-        assert result.findings, "src/ taranmaya devam etmeli"
+        assert result.findings, "src/ must still be scanned"
         assert all("tests" not in f.file for f in result.findings), pattern
 
     def test_exclude_prunes_directories(self, tree):
-        root = tree({"derin/cok/derin/a.txt": f"TC: {VALID_TCKN}"})
+        root = tree({"derin/cok/derin/a.txt": f"ID: {VALID_TCKN}"})
         result = run(root, exclude_globs=("derin/**",))
         assert result.findings == []
 
     def test_extension_filter(self, tree):
-        root = tree({"a.txt": f"TC: {VALID_TCKN}", "b.dat": f"TC: {VALID_TCKN}"})
+        root = tree({"a.txt": f"ID: {VALID_TCKN}", "b.dat": f"ID: {VALID_TCKN}"})
         result = run(root, extensions=(".txt",))
         assert all(f.file.endswith(".txt") for f in result.findings)
 
     def test_max_file_size(self, tree):
-        root = tree({"buyuk.txt": f"TC: {VALID_TCKN}" + "x" * 5000})
+        root = tree({"buyuk.txt": f"ID: {VALID_TCKN}" + "x" * 5000})
         result = run(root, max_file_size=100)
         assert result.findings == []
         assert result.files_skipped == 1
@@ -191,7 +191,7 @@ class TestTargetSelection:
         from sentinel.allowlist import Allowlist
 
         root = tree(
-            {"src/a.txt": f"TC: {VALID_TCKN}", "test_data/b.txt": f"TC: {VALID_TCKN}"}
+            {"src/a.txt": f"ID: {VALID_TCKN}", "test_data/b.txt": f"ID: {VALID_TCKN}"}
         )
         result = run(root, allowlist=Allowlist(paths=("test_data/**",)))
         assert all("test_data" not in f.file for f in result.findings)
@@ -205,8 +205,8 @@ class TestFilters:
         assert all(f.severity_enum >= Severity.CRITICAL for f in result.findings)
 
     def test_rule_selection(self, sample_tree):
-        result = run(sample_tree, include_rules=("TC_KIMLIK",))
-        assert {f.type for f in result.findings} == {"TC_KIMLIK"}
+        result = run(sample_tree, include_rules=("TR_NATIONAL_ID",))
+        assert {f.type for f in result.findings} == {"TR_NATIONAL_ID"}
 
     def test_rule_exclusion(self, sample_tree):
         result = run(sample_tree, exclude_rules=("EMAIL",))
@@ -231,7 +231,7 @@ class TestFilters:
         baseline = tmp_path / "baseline.json"
         save_baseline(str(baseline), first.findings)
 
-        (sample_tree / "yeni.txt").write_text(
+        (sample_tree / "new.txt").write_text(
             "AKIAIOSFODNN7EXAMPLX\n", encoding="utf-8"
         )
         second = run(sample_tree, baseline_path=str(baseline))
@@ -240,24 +240,24 @@ class TestFilters:
 
 class TestArchiveIntegration:
     def test_zip_findings_carry_member_path(self, tmp_path):
-        """v3.0 regresyonu: ZIP taraması tamamen kaybolmuştu."""
-        archive_path = tmp_path / "arsiv.zip"
+        """A v3.0 regression: ZIP scanning had disappeared entirely."""
+        archive_path = tmp_path / "archive.zip"
         with zipfile.ZipFile(archive_path, "w") as archive:
-            archive.writestr("gizli_notlar.txt", f"TC: {VALID_TCKN}")
+            archive.writestr("secret_notes.txt", f"ID: {VALID_TCKN}")
 
         result = run(tmp_path)
         assert len(result.findings) == 1
         finding = result.findings[0]
-        assert finding.file.endswith("arsiv.zip::gizli_notlar.txt")
-        assert finding.source.endswith("arsiv.zip")
+        assert finding.file.endswith("archive.zip::secret_notes.txt")
+        assert finding.source.endswith("archive.zip")
 
 
 class TestExecutionModes:
     @pytest.mark.parametrize("mode", ["serial", "thread", "process"])
     def test_all_modes_agree(self, tree, mode):
-        """Paralel ve seri sonuçlar aynı olmalı; aksi hâlde yarış durumu var."""
+        """Parallel and serial results must match, or there is a race."""
         files = {
-            f"f{i}.txt": f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(12)
+            f"f{i}.txt": f"ID: {VALID_TCKN}\nKart: {VALID_VISA}\n" for i in range(12)
         }
         root = tree(files)
 
@@ -271,11 +271,11 @@ class TestExecutionModes:
         result = Scanner(str(root), config=config).scan()
 
         assert result.files_scanned == 12
-        assert len(result.findings) == 24  # dosya başına 2 bulgu
-        assert {f.type for f in result.findings} == {"TC_KIMLIK", "KREDI_KARTI"}
+        assert len(result.findings) == 24  # 2 findings per file
+        assert {f.type for f in result.findings} == {"TR_NATIONAL_ID", "CREDIT_CARD"}
 
     def test_progress_callback_is_called(self, tree):
-        root = tree({f"f{i}.txt": "temiz" for i in range(5)})
+        root = tree({f"f{i}.txt": "clean" for i in range(5)})
         seen = []
         config = ScanConfig(workers=1, executor="serial", yara_enabled=False)
         Scanner(str(root), config=config).scan(
@@ -285,7 +285,7 @@ class TestExecutionModes:
         assert seen[-1][0] == seen[-1][1] == 5
 
     def test_config_is_picklable(self):
-        """Süreç havuzu yapılandırmayı pickle eder; çağrılabilir alan olamaz."""
+        """A process pool pickles the configuration; no callable fields allowed."""
         import pickle
 
         from sentinel.allowlist import Allowlist
@@ -297,7 +297,7 @@ class TestExecutionModes:
 
 class TestCancellation:
     def test_stop_before_scan_yields_nothing(self, tree):
-        root = tree({f"f{i}.txt": f"TC: {VALID_TCKN}" for i in range(20)})
+        root = tree({f"f{i}.txt": f"ID: {VALID_TCKN}" for i in range(20)})
         config = ScanConfig(workers=1, executor="serial", yara_enabled=False)
         scanner = Scanner(str(root), config=config)
         scanner.stop_scan()
@@ -306,7 +306,7 @@ class TestCancellation:
         assert result.findings == []
 
     def test_stop_midway(self, tree):
-        root = tree({f"f{i:03d}.txt": f"TC: {VALID_TCKN}" for i in range(40)})
+        root = tree({f"f{i:03d}.txt": f"ID: {VALID_TCKN}" for i in range(40)})
         config = ScanConfig(workers=1, executor="serial", yara_enabled=False)
         scanner = Scanner(str(root), config=config)
 
@@ -321,7 +321,7 @@ class TestCancellation:
 
 class TestLegacyApi:
     def test_start_scan_parallel_returns_dicts(self, sample_tree):
-        """Eski betikler sözlük listesi bekliyor."""
+        """Legacy scripts expect a list of dicts."""
         scanner = Scanner(
             str(sample_tree),
             config=ScanConfig(
@@ -343,8 +343,8 @@ class TestLegacyApi:
         assert scanner.quarantine_mode is False
 
     def test_scan_file_wrapper_exists(self, tree):
-        """v3.0'da bu metot yoktu; monitor.py her olayda patlıyordu."""
-        path = tree({"a.txt": f"TC: {VALID_TCKN}"}) / "a.txt"
+        """This method did not exist in v3.0; monitor.py blew up on every event."""
+        path = tree({"a.txt": f"ID: {VALID_TCKN}"}) / "a.txt"
         scanner = Scanner(
             str(path),
             config=ScanConfig(entropy_scan=False, yara_enabled=False),
@@ -373,7 +373,7 @@ class TestSideEffects:
         assert "risk_score" in entry
 
     def test_errors_do_not_abort_the_scan(self, tree, monkeypatch):
-        root = tree({"a.txt": f"TC: {VALID_TCKN}", "b.txt": f"TC: {VALID_TCKN}"})
+        root = tree({"a.txt": f"ID: {VALID_TCKN}", "b.txt": f"ID: {VALID_TCKN}"})
 
         import sentinel.extractors as extractors
 
@@ -381,10 +381,10 @@ class TestSideEffects:
 
         def flaky(path, config, depth=0):
             if os.path.basename(path) == "a.txt":
-                raise OSError("disk hatası taklidi")
+                raise OSError("simulated disk error")
             return original(path, config, depth=depth)
 
         monkeypatch.setattr(extractors, "extract", flaky)
         result = run(root)
         assert result.errors
-        assert result.findings  # b.txt yine tarandı
+        assert result.findings  # b.txt was still scanned

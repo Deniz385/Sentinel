@@ -1,11 +1,12 @@
-"""Office biçimleri: DOCX, XLSX/XLSM, PPTX.
+"""Office formats: DOCX, XLSX/XLSM, PPTX.
 
-Önceki sürümde `.docx` düz metin uzantı listesindeydi — yani ZIP binary
-içeriği metin sanılıp taranıyordu ve hiçbir şey bulunamıyordu. Burada her
-biçim gerçek yapısıyla okunur; kütüphane yoksa DOCX için XML'e düşülür.
+In the previous version `.docx` was in the plain-text extension list,
+so ZIP binary content was treated as text and nothing was ever found.
+Here each format is read through its real structure; without the
+library, DOCX falls back to raw XML.
 
-XLSX ``read_only=True`` ile açılır: 100 MB'lık bir çalışma kitabı
-tamamen belleğe yüklenmez.
+XLSX is opened with ``read_only=True``, so a 100 MB workbook is never
+fully loaded into memory.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ DOCX_EXTENSIONS = frozenset({".docx", ".docm", ".dotx"})
 XLSX_EXTENSIONS = frozenset({".xlsx", ".xlsm", ".xltx"})
 PPTX_EXTENSIONS = frozenset({".pptx", ".pptm", ".potx"})
 
-#: Satır başına üretilecek hücre sayısı üst sınırı (aşırı geniş sayfalar).
+#: Upper bound on cells emitted per row (for absurdly wide sheets).
 _MAX_CELLS_PER_ROW = 500
 _ROWS_PER_CHUNK = 2000
 
@@ -32,10 +33,10 @@ _PARA_END_RE = re.compile(r"</w:p>")
 
 
 def _docx_via_xml(path: str):
-    """python-docx yoksa doğrudan ``word/document.xml``'i oku.
+    """Read ``word/document.xml`` directly when python-docx is absent.
 
-    Üstbilgi/altbilgi ve dipnotlar da taranır; sırlar sıklıkla oralarda
-    kalır (ör. şablon üstbilgisindeki test hesabı).
+    Headers, footers and notes are scanned too; secrets often sit there
+    (a test account left in a template header, say).
     """
     targets = ("word/document.xml",)
     with zipfile.ZipFile(path) as archive:
@@ -50,7 +51,7 @@ def _docx_via_xml(path: str):
                 raw = archive.read(name).decode("utf-8", errors="replace")
             except Exception:
                 continue
-            # Paragraf sonlarını satır sonuna çevir, kalan etiketleri at.
+            # Turn paragraph ends into newlines, drop the remaining tags.
             raw = _PARA_END_RE.sub("\n", raw)
             text = _XML_TAG_RE.sub("", raw)
             if text.strip():
@@ -74,7 +75,7 @@ def extract_docx(path: str, config):
     try:
         document = docx.Document(path)
     except Exception:
-        # Bozuk/parola korumalı dosya: XML yolunu dene.
+        # Corrupt or password-protected file: try the XML path.
         try:
             for text in _docx_via_xml(path):
                 yield TextChunk(text, path, 0, path)

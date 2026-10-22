@@ -1,14 +1,14 @@
-"""SARIF 2.1.0 çıktısı.
+"""SARIF 2.1.0 output.
 
-Neden bu biçim: GitHub Code Scanning, Azure DevOps ve çoğu SAST panosu
-SARIF okur. Sentinel'in bulguları böylece bir pull request'in "Files
-changed" görünümünde satır satır yorum olarak çıkar; araç masaüstü
-taramasından CI kapısına dönüşür.
+Why this format: GitHub Code Scanning, Azure DevOps and most SAST
+dashboards read SARIF. Sentinel's findings therefore show up as
+line-level comments in a pull request's "Files changed" view; the tool
+turns from a desktop scan into a CI gate.
 
-GitHub'a yükleme::
+Uploading to GitHub::
 
     sentinel scan . --format sarif
-    # .github/workflows içinde:
+    # inside .github/workflows:
     #   uses: github/codeql-action/upload-sarif@v3
     #   with: { sarif_file: sentinel.sarif }
 """
@@ -26,7 +26,7 @@ __all__ = ["write", "to_dict"]
 
 SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 
-#: SARIF yalnızca error/warning/note/none bilir; beş kademeyi eşleriz.
+#: SARIF knows only error/warning/note/none; map the five levels onto it.
 _LEVELS = {
     Severity.CRITICAL: "error",
     Severity.HIGH: "error",
@@ -35,7 +35,7 @@ _LEVELS = {
     Severity.INFO: "note",
 }
 
-#: GitHub bulguları bu puana göre sıralar (0-10).
+#: GitHub orders findings by this score (0-10).
 _SECURITY_SEVERITY = {
     Severity.CRITICAL: "9.5",
     Severity.HIGH: "7.5",
@@ -61,15 +61,15 @@ def _rules() -> list:
                 },
             }
         )
-    # Katalog dışı kurallar (entropi ve YARA) çalışma anında eklenir.
+    # Rules outside the catalogue (entropy and YARA) are added at runtime.
     rules.append(
         {
             "id": "HIGH_ENTROPY_STRING",
             "name": "HIGH_ENTROPY_STRING",
-            "shortDescription": {"text": "Yüksek entropili dizge"},
+            "shortDescription": {"text": "High-entropy string"},
             "fullDescription": {
-                "text": "Rastgele üretilmiş görünen, bilinen bir sağlayıcıya "
-                "ait olmayan sır adayı."
+                "text": "A secret candidate that looks randomly generated "
+                "and belongs to no known provider."
             },
             "defaultConfiguration": {"level": "warning"},
             "properties": {"tags": ["secret", "entropy"], "security-severity": "5.0"},
@@ -79,22 +79,22 @@ def _rules() -> list:
 
 
 def _relative(path: str, base: str) -> str:
-    """SARIF göreli URI ister; mutlak Windows yolları paneli bozar."""
+    """SARIF wants relative URIs; absolute Windows paths break the panel."""
     container = path.split("::", 1)[0]
     try:
         relative = os.path.relpath(container, base)
-    except ValueError:  # farklı sürücü (Windows)
+    except ValueError:  # different drive (Windows)
         relative = container
     return relative.replace(os.sep, "/")
 
 
 def _base_dir(target: str) -> str:
-    """Göreli URI'lerin köküne alınacak dizin.
+    """The directory relative URIs are rooted at.
 
-    Hedefi yalnızca *mevcut bir dosya* olduğunda üst dizinine indiririz;
-    `isdir` kontrolüne güvenmek, hedef henüz yokken (ya da başka bir
-    makinede üretilen rapor için) kökü bir seviye yukarı kaydırıp tüm
-    yolları bozuyordu.
+    We step up to the parent only when the target is an *existing
+    file*; relying on an `isdir` check moved the root up one level when
+    the target did not exist yet (or for a report produced on another
+    machine), which broke every path.
     """
     if os.path.isfile(target):
         return os.path.dirname(target) or "."
@@ -120,8 +120,8 @@ def to_dict(result) -> dict:
             }
 
         message = (
-            f"{finding.title or finding.type} tespit edildi "
-            f"(maskeli: {finding.content_masked})"
+            f"{finding.title or finding.type} detected "
+            f"(masked: {finding.content_masked})"
         )
         results.append(
             {

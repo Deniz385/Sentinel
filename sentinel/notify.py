@@ -1,13 +1,14 @@
-"""Webhook bildirimleri (Discord / Slack / generic).
+"""Webhook notifications (Discord / Slack / generic).
 
-v3.0'da webhook adresi `scanner.py` içinde sabitti ve her bulgu için
-**ayrı** bir istek atılıyordu: 500 bulgulu bir taramada 500 HTTP isteği,
-rate-limit duvarı ve kanalın çöpe dönmesi. Burada:
+In v3.0 the webhook address was hard-coded in `scanner.py` and a
+**separate** request was sent per finding: a scan with 500 findings
+meant 500 HTTP requests, a rate-limit wall and a channel full of noise.
+Here:
 
-* adres yapılandırmadan/ortamdan gelir (koda gömülmez),
-* varsayılan olarak **tek özet mesaj** gönderilir,
-* yük yalnızca maskelenmiş veri içerir,
-* hata taramayı düşürmez.
+* the address comes from configuration or the environment, never code,
+* a **single summary message** is sent by default,
+* the payload carries masked data only,
+* a failure never fails the scan.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from sentinel.severity import Severity
 
 __all__ = ["notify_findings", "build_payload", "detect_provider"]
 
-#: Özet mesajda listelenecek en fazla bulgu sayısı.
+#: Maximum number of findings listed in the summary message.
 _MAX_LINES = 15
 _TIMEOUT = 5
 
@@ -38,29 +39,29 @@ def _format_summary(result, config) -> str:
     counts = result.counts_by_severity()
 
     header = (
-        f"🚨 SENTINEL DLP ALARMI — risk skoru {result.risk_score}/100\n"
-        f"📂 Hedef: {result.target}\n"
-        f"🔍 {result.files_scanned} dosya tarandı, {len(result.findings)} bulgu "
-        f"(kritik: {counts.get('critical', 0)}, yüksek: {counts.get('high', 0)})\n"
+        f"🚨 SENTINEL DLP ALERT - risk score {result.risk_score}/100\n"
+        f"📂 Target: {result.target}\n"
+        f"🔍 {result.files_scanned} files scanned, {len(result.findings)} findings "
+        f"(critical: {counts.get('critical', 0)}, high: {counts.get('high', 0)})\n"
     )
 
     lines = []
     for finding in relevant[:_MAX_LINES]:
         severity = finding.severity_enum
         lines.append(
-            f"{severity.icon} [{severity.label_tr}] {finding.type} — "
+            f"{severity.icon} [{severity.label}] {finding.type} - "
             f"{finding.file}:{finding.line} → `{finding.content_masked}`"
         )
     if len(relevant) > _MAX_LINES:
-        lines.append(f"… ve {len(relevant) - _MAX_LINES} bulgu daha.")
+        lines.append(f"… and {len(relevant) - _MAX_LINES} more findings.")
     if not lines:
-        lines.append("Eşik üstü bulgu yok.")
+        lines.append("No findings at or above the threshold.")
 
     return header + "\n".join(lines)
 
 
 def build_payload(result, config) -> dict:
-    """Sağlayıcıya uygun JSON yükünü üretir."""
+    """Build the JSON payload for the detected provider."""
     text = _format_summary(result, config)
     provider = detect_provider(config.webhook_url)
 
@@ -69,7 +70,7 @@ def build_payload(result, config) -> dict:
     if provider == "teams":
         return {"text": text}
     if provider == "discord":
-        # Discord 2000 karakter sınırı uygular.
+        # Discord enforces a 2000-character limit.
         return {"content": text[:1990]}
     return {
         "text": text,
@@ -78,13 +79,13 @@ def build_payload(result, config) -> dict:
 
 
 def notify_findings(result, config) -> bool:
-    """Tarama sonucunu webhook'a gönderir.
+    """Send the scan result to the webhook.
 
-    Yapılandırma `webhook_batch=False` ise her bulgu ayrı gönderilir
-    (SIEM entegrasyonları bunu isteyebilir), aksi hâlde tek özet.
+    With `webhook_batch=False` each finding is sent separately (SIEM
+    integrations may want that); otherwise a single summary is sent.
     """
     url = config.webhook_url
-    if not url or "SENIN_WEBHOOK" in url:
+    if not url or "YOUR_WEBHOOK" in url:
         return False
 
     try:
@@ -107,7 +108,7 @@ def notify_findings(result, config) -> bool:
         for finding in relevant:
             severity = finding.severity_enum
             message = (
-                f"{severity.icon} **{finding.type}** [{severity.label_tr}]\n"
+                f"{severity.icon} **{finding.type}** [{severity.label}]\n"
                 f"📂 `{finding.file}`:{finding.line}\n"
                 f"🕵️ `{finding.content_masked}`"
             )
@@ -120,6 +121,6 @@ def notify_findings(result, config) -> bool:
             response = session.post(url, json=payload, timeout=_TIMEOUT)
             sent = sent or response.status_code < 400
         except Exception:
-            # Bildirim en iyi gayret esaslıdır; tarama sonucu kaybolmaz.
+            # Notification is best-effort; the scan result is never lost.
             continue
     return sent

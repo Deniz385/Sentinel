@@ -1,9 +1,9 @@
-"""Artımlı tarama önbelleği testleri.
+"""Incremental scan cache tests.
 
-Bir güvenlik aracında önbellek, yanlış kurgulandığında sızıntıyı
-*görünmez* yapar. Bu yüzden testlerin ağırlığı "hızlandı mı"da değil,
-**ne zaman güvenilmemesi gerektiği**nde: kural değişimi, geçici hata,
-karantina ve mtime'ın sınırları.
+In a security tool a cache, built carelessly, makes a leak
+*invisible*. So the weight of these tests is not on "is it faster"
+but on **when it must not be trusted**: a rule change, a transient
+error, quarantine, and the limits of mtime.
 """
 
 from __future__ import annotations
@@ -38,14 +38,14 @@ def run(target, cache_path, **overrides):
 
 
 def touch_older(path, seconds: int = 10):
-    """Dosyanın mtime'ını geriye alır (çözünürlük bağımsız tazelik kontrolü)."""
+    """Move the file's mtime back (a resolution-independent freshness check)."""
     info = os.stat(path)
     os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns - seconds * 1_000_000_000))
 
 
 class TestCacheHits:
     def test_second_scan_reads_nothing_and_finds_the_same(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n", "b.txt": f"Kart: {VALID_VISA}\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n", "b.txt": f"Card: {VALID_VISA}\n"})
         cache = tmp_path / "onbellek.json"
 
         first = run(target, cache)
@@ -83,7 +83,7 @@ class TestCacheHits:
             assert getattr(after, attribute) == getattr(before, attribute), attribute
 
     def test_changed_file_is_rescanned(self, tree, tmp_path):
-        target = tree({"a.txt": "temiz içerik\n"})
+        target = tree({"a.txt": "clean content\n"})
         cache = tmp_path / "c.json"
 
         assert run(target, cache).findings == []
@@ -94,11 +94,11 @@ class TestCacheHits:
         assert second.files_cached == 0
 
     def test_only_the_changed_file_is_rescanned(self, tree, tmp_path):
-        target = tree({f"d{i}.txt": f"dosya {i}\n" for i in range(6)})
+        target = tree({f"d{i}.txt": f"file {i}\n" for i in range(6)})
         cache = tmp_path / "c.json"
         run(target, cache)
 
-        (target / "d3.txt").write_bytes(f"Kart: {VALID_VISA}\n".encode())
+        (target / "d3.txt").write_bytes(f"Card: {VALID_VISA}\n".encode())
         second = run(target, cache)
 
         assert second.files_cached == 5
@@ -117,14 +117,14 @@ class TestCacheHits:
         assert len(second.findings) == 1
 
     def test_deleted_file_disappears_from_results(self, tree, tmp_path):
-        target = tree({"a.txt": f"TC: {VALID_TCKN}\n", "b.txt": "temiz\n"})
+        target = tree({"a.txt": f"ID: {VALID_TCKN}\n", "b.txt": "clean\n"})
         cache = tmp_path / "c.json"
         run(target, cache)
 
         os.unlink(target / "a.txt")
         second = run(target, cache)
-        # Önbellekte kaydı olsa bile dosya artık ağaçta olmadığı için
-        # hiç sorulmaz; eski bulgu rapora sızmamalı.
+        # Even with an entry in the cache, the file is no longer in the
+        # tree, so it is never asked about; the old finding must not leak.
         assert second.findings == []
 
 
@@ -134,8 +134,8 @@ class TestInvalidation:
         cache = tmp_path / "c.json"
         run(target, cache)
 
-        # Entropi taramasını açmak yeni bulgu türü demek: eski kararlar
-        # geçersizdir, yoksa yeni kuralın bulacağı sır gizli kalır.
+        # Enabling entropy scanning means a new finding type: the old
+        # verdicts are void, or the new rule's secret stays hidden.
         second = run(target, cache, entropy_scan=True)
         assert second.files_cached == 0
 
@@ -166,9 +166,9 @@ class TestInvalidation:
             assert config_fingerprint(base) != config_fingerprint(changed)
 
     def test_editing_a_yara_rule_drops_the_cache(self, tmp_path):
-        # Yapılandırmada yalnızca dizin yolu durur; kural dosyasının
-        # kendisi değişince de önbellek düşmeli.
-        rules = tmp_path / "kurallar"
+        # The configuration holds only the directory path; the cache must
+        # also drop when a rule file itself changes.
+        rules = tmp_path / "rules"
         rules.mkdir()
         rule = rules / "test.yar"
         rule.write_text('rule A { strings: $a = "x" condition: $a }', encoding="utf-8")
@@ -183,7 +183,7 @@ class TestInvalidation:
         assert config_fingerprint(config) != before
 
     def test_yara_signature_ignored_when_yara_is_off(self, tmp_path):
-        rules = tmp_path / "kurallar"
+        rules = tmp_path / "rules"
         rules.mkdir()
         (rules / "test.yar").write_text("rule A { condition: true }", encoding="utf-8")
 
@@ -197,8 +197,8 @@ class TestInvalidation:
         assert config_fingerprint(config)
 
     def test_version_is_part_of_the_fingerprint(self, monkeypatch):
-        # Yükseltme doğrulayıcıları ya da entropi buluşsallarını
-        # değiştirmiş olabilir; yeni sürüm eski kararları devralmaz.
+        # An upgrade may have changed the validators or the entropy
+        # heuristics; a new version does not inherit the old verdicts.
         import sentinel.cache as cache_module
 
         config = ScanConfig()
@@ -209,7 +209,7 @@ class TestInvalidation:
     def test_corrupt_cache_file_falls_back_to_full_scan(self, tree, tmp_path):
         target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
         cache = tmp_path / "c.json"
-        cache.write_text("{ bu gecerli json degil", encoding="utf-8")
+        cache.write_text("{ this is not valid json", encoding="utf-8")
 
         result = run(target, cache)
         assert result.files_cached == 0
@@ -251,22 +251,22 @@ class TestSafety:
         )
 
         scanner = Scanner(str(target), config=config)
-        # Veri SİLEN bir karar bayat kanıta dayanamaz.
+        # A decision that DELETES data cannot rest on stale evidence.
         assert scanner._cache is None
 
     def test_transient_errors_are_not_remembered(self, tmp_path):
         cache = ScanCache(path=str(tmp_path / "c.json"), config_hash="h")
         victim = tmp_path / "a.txt"
-        victim.write_bytes(b"icerik")
+        victim.write_bytes(b"content")
 
         cache.remember(
             FileReport(path=str(victim), error="OSError: kilitli", findings=[])
         )
-        # Kilitli bir dosya sonsuza kadar görünmez olmamalı.
+        # A locked file must not become invisible forever.
         assert cache.entries == {}
 
     def test_cache_file_is_not_scanned(self, tree, tmp_path):
-        # Önbellek hedefin *içinde* duruyorsa kendi kendini taramamalı.
+        # With the cache *inside* the target, it must not scan itself.
         target = tree({"a.txt": f"TC: {VALID_TCKN}\n"})
         cache = target / ".sentinel-cache.json"
 
@@ -287,19 +287,19 @@ class TestSafety:
 
         save_baseline(str(baseline), first.findings)
 
-        # Baz çizgisi önbellekten *sonra* uygulanır: önbellek isabet
-        # etse de bastırma çalışmalı.
+        # The baseline is applied *after* the cache: suppression must
+        # still work on a cache hit.
         second = run(target, cache, baseline_path=str(baseline))
         assert second.files_cached == 1
         assert second.findings == []
 
     def test_mtime_rollback_is_a_known_limitation(self, tree, tmp_path):
-        """Tazelik ölçütü ``(mtime, boyut)``; bu bir sezgidir, kanıt değil.
+        """The freshness test ``(mtime, size)`` is a heuristic, not proof.
 
-        mtime'ı geri alan ve boyutu koruyan bir değişiklik önbelleği
-        atlatır. Davranışı burada açıkça çiviliyoruz: belgelenmiş bir
-        ödün, keşfedilmemiş bir hata değil. Adli kesinlik gerektiğinde
-        ``incremental`` kapalı kalmalı (varsayılan).
+        A change that restores mtime and preserves size slips past the
+        cache. We pin the behaviour here explicitly: this is a documented
+        trade-off, not an undiscovered bug. Where forensic certainty is
+        required, ``incremental`` stays off (the default).
         """
         target = tree({"a.txt": "aaaaaaaaaaaaaaaa\n"})
         cache = tmp_path / "c.json"
@@ -313,9 +313,9 @@ class TestSafety:
 
         stale = run(target, cache)
         assert stale.files_cached == 1
-        assert stale.findings == []  # kaçırıldı — bilinen ödün
+        assert stale.findings == []  # missed - the known trade-off
 
-        # Artımlı tarama kapalıyken aynı dosya bulunur.
+        # With incremental scanning off, the same file is found.
         full = run(target, cache, incremental=False)
         assert len(full.findings) == 1
 
@@ -343,9 +343,9 @@ class TestHousekeeping:
         assert not (tmp_path / "c.json.tmp").exists()
 
     def test_unwritable_location_does_not_raise(self, tmp_path):
-        # Önbellek yazılamıyorsa tarama yine de tamamlanmalı.
+        # When the cache cannot be written, the scan must still finish.
         cache = ScanCache(path=str(tmp_path / "a.txt" / "c.json"), config_hash="h")
-        (tmp_path / "a.txt").write_bytes(b"dosya, dizin degil")
+        (tmp_path / "a.txt").write_bytes(b"a file, not a directory")
         assert cache.save() is False
 
     def test_stats_separate_stale_from_missing(self, tree, tmp_path):
@@ -361,8 +361,8 @@ class TestHousekeeping:
         scanner.scan()
         stats = scanner._cache.stats
         assert stats.hits == 1  # b.txt
-        assert stats.stale == 1  # a.txt (mtime değişti)
-        assert stats.misses == 1  # c.txt (kayıt yok)
+        assert stats.stale == 1  # a.txt (mtime changed)
+        assert stats.misses == 1  # c.txt (no entry)
 
     def test_oversized_cache_keeps_the_newest_entries(self, tmp_path, monkeypatch):
         import sentinel.cache as cache_module
@@ -370,7 +370,7 @@ class TestHousekeeping:
         monkeypatch.setattr(cache_module, "MAX_ENTRIES", 3)
         cache = ScanCache(path=str(tmp_path / "c.json"), config_hash="h")
         for index in range(10):
-            cache.entries[f"/dosya{index}"] = {
+            cache.entries[f"/file{index}"] = {
                 "mtime_ns": 1,
                 "size": 1,
                 "findings": [],
@@ -380,4 +380,4 @@ class TestHousekeeping:
 
         written = json.loads((tmp_path / "c.json").read_text(encoding="utf-8"))
         assert len(written["entries"]) == 3
-        assert set(written["entries"]) == {"/dosya9", "/dosya8", "/dosya7"}
+        assert set(written["entries"]) == {"/file9", "/file8", "/file7"}

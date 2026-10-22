@@ -1,10 +1,10 @@
-"""Rapor üreticileri.
+"""Report writers.
 
-Biçimler: ``html``, ``json``, ``csv``, ``sarif``, ``md``, ``pdf``.
+Formats: ``html``, ``json``, ``csv``, ``sarif``, ``md``, ``pdf``.
 
-SARIF neden önemli: GitHub Code Scanning ve çoğu SAST panosu bu biçimi
-okur. Yani Sentinel'in çıktısı CI'da "Security" sekmesinde satır satır
-görünebilir — araç bir masaüstü oyuncağından CI kapısına dönüşür.
+Why SARIF matters: GitHub Code Scanning and most SAST dashboards read
+it. Sentinel's output can therefore appear line by line in the CI
+"Security" tab - the tool turns from a desktop toy into a CI gate.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def report_path(output_dir: str, fmt: str) -> str:
 
 
 def write_reports(result, output_dir: str, formats=("html", "csv")) -> dict:
-    """İstenen biçimlerde rapor yazar ve ``{biçim: yol | hata}`` döndürür."""
+    """Write the requested formats and return ``{format: path | error}``."""
     from sentinel.reporting import csv_report, html, json_report, markdown, sarif
 
     os.makedirs(output_dir, exist_ok=True)
@@ -47,7 +47,7 @@ def write_reports(result, output_dir: str, formats=("html", "csv")) -> dict:
     for fmt in formats:
         fmt = fmt.strip().lower()
         if fmt not in FORMATS:
-            written[fmt] = f"HATA: bilinmeyen biçim ({fmt})"
+            written[fmt] = f"ERROR: unknown format ({fmt})"
             continue
         path = report_path(output_dir, fmt)
         try:
@@ -55,11 +55,11 @@ def write_reports(result, output_dir: str, formats=("html", "csv")) -> dict:
                 from sentinel.reporting import pdf_report
 
                 ok, message = pdf_report.write(result, path)
-                written[fmt] = path if ok else f"HATA: {message}"
+                written[fmt] = path if ok else f"ERROR: {message}"
             else:
                 writers[fmt](result, path)
                 written[fmt] = path
         except Exception as exc:
-            written[fmt] = f"HATA: {type(exc).__name__}: {exc}"
+            written[fmt] = f"ERROR: {type(exc).__name__}: {exc}"
 
     return written

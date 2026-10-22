@@ -1,9 +1,10 @@
-"""Maskeleme ve parmak izi üretimi.
+"""Masking and fingerprint generation.
 
-Yönerge gereği rapor, log ve webhook yüklerinde **açık hassas veri
-bulunmamalıdır**. Ancak maskeleme tek başına yetmez: aynı kredi kartının üç
-farklı dosyada geçtiğini anlamak için korelasyon gerekir. Bunu, veriyi
-sızdırmadan, HMAC-SHA256 parmak izi ile yaparız.
+By policy there must be **no cleartext sensitive data** in reports, logs
+or webhook payloads. Masking alone is not enough, though: telling that
+the same credit card appears in three different files requires
+correlation. We do that without leaking the value, via an HMAC-SHA256
+fingerprint.
 """
 
 from __future__ import annotations
@@ -17,10 +18,10 @@ SNIPPET_WIDTH = 60
 
 
 def mask_data(data: str, keep: int = 2) -> str:
-    """Hassas veriyi maskeler: ``12345678901`` -> ``12*******01``.
+    """Mask sensitive data: ``12345678901`` -> ``12*******01``.
 
-    Çok kısa veriler (<= 2*keep) tamamen yıldızlanır, çünkü baş ve son
-    karakterleri göstermek verinin tamamını açığa çıkarırdı.
+    Very short values (<= 2*keep) are starred out completely, because
+    showing their first and last characters would reveal the whole thing.
     """
     if not data:
         return ""
@@ -31,11 +32,11 @@ def mask_data(data: str, keep: int = 2) -> str:
 
 
 def fingerprint(value: str, salt: str = "", length: int = 16) -> str:
-    """Değerin geri döndürülemez kimliği.
+    """An irreversible identity for a value.
 
-    `salt` verildiğinde HMAC kullanılır; böylece aynı değer farklı
-    kurumlarda farklı parmak izi üretir ve hazır tablo (rainbow table)
-    saldırısıyla çözülemez. Salt boşsa düz SHA-256 kullanılır.
+    With a `salt` this uses HMAC, so the same value yields a different
+    fingerprint at different organizations and cannot be reversed with a
+    rainbow table. With an empty salt it falls back to plain SHA-256.
     """
     value = str(value)
     if salt:
@@ -54,25 +55,26 @@ def redact_snippet(
     width: int = SNIPPET_WIDTH,
     spans: list | tuple | None = None,
 ) -> str:
-    """Bulgunun etrafındaki bağlamı, bulgunun kendisi maskelenmiş olarak verir.
+    """Give the context around a finding, with the finding itself masked.
 
-    Analist "bu neden tetiklendi?" sorusunu rapora bakarak cevaplayabilsin
-    diye bağlam şart; ama bağlamdaki **hiçbir** hassas değer açıkta
-    kalmamalı. `spans` verildiğinde o aralıkların hepsi maskelenir.
+    Context is essential so an analyst can answer "why did this fire?"
+    from the report alone - but **no** sensitive value in that context
+    may be left in the clear. When `spans` is given, all of those ranges
+    are masked.
     """
     if not line:
         return ""
 
-    # Satırdaki TÜM hassas değerleri maskele, yalnızca odaktakini değil.
-    # Aksi hâlde "kart,IBAN,TC" gibi bir CSV satırında kart bulgusunun
-    # alıntısı IBAN'ı, IBAN bulgusunun alıntısı kartı açıkta bırakır —
-    # rapor, koruduğunu iddia ettiği verinin neredeyse tamamını sızdırır.
+    # Mask EVERY sensitive value on the line, not only the one in focus.
+    # Otherwise, on a CSV row like "card,iban,id", the card finding's
+    # snippet exposes the IBAN and the IBAN finding's snippet exposes the
+    # card - the report leaks nearly all of the data it claims to protect.
     targets = list(spans) if spans else []
     if (start, end) not in targets:
         targets.append((start, end))
 
-    # `mask_data` uzunluğu korur, bu yüzden yerinde değiştirmek kaydırma
-    # yaratmaz; yine de savunmacı davranıp uzunluğu doğruluyoruz.
+    # `mask_data` preserves length, so replacing in place introduces no
+    # shift; we still verify the length defensively.
     chars = list(line)
     for span_start, span_end in targets:
         span_start = max(0, span_start)

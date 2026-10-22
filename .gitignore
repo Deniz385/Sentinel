@@ -5,7 +5,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 
-# --- Sanal ortamlar ---
+# --- Virtual environments ---
 venv/
 .venv/
 env/
@@ -13,12 +13,12 @@ env/
 .env.*
 !.env.example
 
-# --- Paketleme çıktıları ---
+# --- Packaging output ---
 build/
 dist/
 *.spec
 
-# --- Test / lint önbellekleri ---
+# --- Test and lint caches ---
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -26,8 +26,8 @@ dist/
 coverage.xml
 htmlcov/
 
-# --- KARANTİNA VE SIRLAR (gizlilik!) ---
-# Karantina kasası hassas veri içerir; ASLA commit edilmez.
+# --- QUARANTINE AND SECRETS (privacy!) ---
+# The quarantine vault holds sensitive data; NEVER commit it.
 KARANTINA_BOLGESI/
 QUARANTINE_ZONE/
 *.enc
@@ -37,7 +37,7 @@ karantina_kayitlari.json
 *.key
 vault.key
 
-# --- Tarama çıktıları (üretilen dosyalar; depoya ait değil) ---
+# --- Scan output (generated files; they do not belong in the repo) ---
 dashboard.html
 scan_results.*
 scan_report.*
@@ -46,18 +46,18 @@ baseline.json
 logs/
 *.log
 
-# --- Artımlı tarama önbelleği (yerel durum; makineye özgüdür) ---
+# --- Incremental scan cache (local state, specific to one machine) ---
 .sentinel-cache.json
 .sentinel-cache.json.tmp
 
-# --- Üretilen test verisi (52 MB'lık dosya v3.0'da commit edilmişti) ---
+# --- Generated test data (a 52 MB file was committed in v3.0) ---
 big_test_data.txt
 big_*.txt
 
-# --- Yerel yapılandırma ---
+# --- Local configuration ---
 sentinel.local.yml
 
-# --- IDE / işletim sistemi ---
+# --- IDE and operating system ---
 .vscode/
 .idea/
 .DS_Store

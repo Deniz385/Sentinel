@@ -1,13 +1,12 @@
-"""Gerçek zamanlı dosya sistemi izleme.
+"""Real-time filesystem monitoring.
 
-v3.0'daki `monitor.py`, `Scanner` üzerinde hiç tanımlanmamış
-``scan_file_wrapper()`` metodunu çağırıyordu: izleme her olayda
-``AttributeError`` veriyordu, yani özellik hiç çalışmıyordu. Ayrıca
-`watchdog` bağımlılıklarda bile yoktu.
+The v3.0 `monitor.py` called ``scan_file_wrapper()``, a method that was
+never defined on `Scanner`: monitoring raised ``AttributeError`` on
+every event, so the feature never worked at all. `watchdog` was not even
+listed as a dependency.
 
-Buradaki sürüm ek olarak **debounce** uygular: editörler tek kaydetmede
-3-10 `modified` olayı üretir; her biri için yeniden tarama yapmak CPU'yu
-boşa harcar.
+This version also applies **debouncing**: editors emit 3-10 `modified`
+events for a single save, and rescanning on each one wastes CPU.
 """
 
 from __future__ import annotations
@@ -18,10 +17,10 @@ import time
 
 __all__ = ["RealTimeMonitor", "DLPEventHandler", "watchdog_available"]
 
-#: Aynı dosya için bu süre içinde gelen tekrar olaylar yoksayılır (saniye).
+#: Repeat events for the same file within this window are ignored (seconds).
 _DEBOUNCE_SECONDS = 1.5
 
-#: Geçici/çöp dosya kalıpları — editör ve Office ara dosyaları.
+#: Temporary and junk file shapes - editor and Office intermediate files.
 _IGNORED_SUFFIXES = (".tmp", ".swp", ".swx", ".part", ".crdownload", "~")
 _IGNORED_PREFIXES = ("~$", ".~lock.", ".goutputstream")
 
@@ -48,10 +47,10 @@ def _base_handler():
 
 
 class DLPEventHandler:
-    """Dosya olaylarını tarayıcıya yönlendirir (debounce'lu).
+    """Route file events to the scanner, with debouncing.
 
-    `watchdog` kurulu olmadığında bu sınıf da import edilebilsin diye
-    taban sınıf çalışma anında bağlanır.
+    The base class is bound at runtime so this class can still be
+    imported when `watchdog` is not installed.
     """
 
     def __init__(self, scanner, log_callback=None, on_finding=None):
@@ -61,7 +60,7 @@ class DLPEventHandler:
         self._last_seen: dict[str, float] = {}
         self._lock = threading.Lock()
 
-    # watchdog arayüzü
+    # watchdog interface
     def dispatch(self, event):
         if getattr(event, "is_directory", False):
             return
@@ -69,10 +68,10 @@ class DLPEventHandler:
         if kind not in ("created", "modified", "moved"):
             return
         path = getattr(event, "dest_path", "") or getattr(event, "src_path", "")
-        label = {"created": "YENİ DOSYA", "modified": "DEĞİŞİKLİK", "moved": "TAŞIMA"}[kind]
+        label = {"created": "NEW FILE", "modified": "CHANGED", "moved": "MOVED"}[kind]
         self.process(path, label)
 
-    def process(self, filepath: str, event_type: str = "OLAY"):
+    def process(self, filepath: str, event_type: str = "EVENT"):
         if not filepath or _should_ignore(filepath):
             return
         if not os.path.isfile(filepath):
@@ -84,7 +83,7 @@ class DLPEventHandler:
             if now - last < _DEBOUNCE_SECONDS:
                 return
             self._last_seen[filepath] = now
-            # Sözlüğü sınırla: uzun süre çalışan izleyicide bellek sızmasın.
+            # Bound the dict so a long-running monitor does not leak memory.
             if len(self._last_seen) > 5000:
                 cutoff = now - 60
                 self._last_seen = {
@@ -98,28 +97,28 @@ class DLPEventHandler:
         try:
             findings = self.scanner.scan_file(filepath)
         except Exception as exc:
-            self.log(f"[HATA] {filepath}: {exc}")
+            self.log(f"[ERROR] {filepath}: {exc}")
             return
 
         if findings:
             highest = max(f.severity_enum for f in findings)
             self.log(
-                f"⚠️ TEHDİT: {len(findings)} bulgu "
-                f"({highest.label_tr}) — {os.path.basename(filepath)}"
+                f"⚠️ THREAT: {len(findings)} findings "
+                f"({highest.label}) - {os.path.basename(filepath)}"
             )
             if self.on_finding is not None:
                 self.on_finding(filepath, findings)
         else:
-            self.log(f"✅ Temiz: {os.path.basename(filepath)}")
+            self.log(f"✅ Clean: {os.path.basename(filepath)}")
 
 
 class RealTimeMonitor:
-    """Bir dizini özyinelemeli olarak izler."""
+    """Watch a directory recursively."""
 
     def __init__(self, target_dir: str, scanner, log_callback=None, on_finding=None):
         if not watchdog_available():
             raise RuntimeError(
-                "Gerçek zamanlı izleme için watchdog gerekli: "
+                "Real-time monitoring requires watchdog: "
                 "pip install 'sentinel-dlp[monitor]'"
             )
         from watchdog.observers import Observer

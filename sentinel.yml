@@ -1,10 +1,10 @@
-# Sentinel'in kendi deposu için yapılandırma.
+# Configuration for Sentinel's own repository.
 #
-# Bu dosya aynı zamanda çalışan bir örnektir: CI'daki "dogfood" adımı
-# Sentinel'i kendi kaynak koduna karşı çalıştırır, yani buradaki
-# allowlist her commit'te sınanır.
+# This file is also a working example: the "dogfood" step in CI runs
+# Sentinel against its own source, so the allowlist below is exercised
+# on every commit.
 #
-# SIRLARI BURAYA YAZMAYIN. Ortam değişkeni kullanın:
+# DO NOT PUT SECRETS HERE. Use environment variables:
 #   SENTINEL_VAULT_KEY, SENTINEL_WEBHOOK_URL, SENTINEL_FINGERPRINT_SALT
 
 target: .
@@ -15,9 +15,9 @@ exclude_globs:
   - "*.min.js"
   - "*.lock"
   - "htmlcov/**"
-  # Artımlı tarama önbelleği. Motor kendi önbelleğini zaten atlar; bu
-  # satır, önbellek başka bir yoldan (ör. `--no-incremental` ile) taranan
-  # bir ağaçta kalmışsa da gürültü yapmasını engeller.
+  # The incremental scan cache. The engine already skips its own cache;
+  # this line also keeps it quiet if the cache is left in a tree scanned
+  # some other way.
   - ".sentinel-cache.json"
 
 entropy_scan: true
@@ -27,19 +27,19 @@ workers: 0
 
 allowlist:
   paths:
-    # Bir DLP aracının kendi kural kataloğu, tanım gereği her desenin bir
-    # örneğini içerir. Bu dosyayı taramak 12 kaçınılmaz yanlış pozitif
-    # üretir; kataloğun doğruluğu `tests/test_patterns.py` ile güvence
-    # altındadır, taramayla değil.
+    # A DLP tool's own rule catalogue contains, by definition, one
+    # example of every pattern. Scanning this file produces 12
+    # unavoidable false positives; the catalogue's correctness is
+    # assured by `tests/test_patterns.py`, not by scanning.
     - "sentinel/patterns.py"
-    # Test donanımları kasıtlı olarak geçerli (ama uydurma) değerler
-    # taşır; `tests/conftest.py` bunların sentetik olduğunu belgeler.
+    # Test fixtures deliberately carry valid (but invented) values;
+    # `tests/conftest.py` documents that they are synthetic.
     - "tests/**"
-    # Sentetik veri üreteci: ürettiği her şey sahtedir.
+    # Synthetic data generator: everything it produces is fake.
     - "tools/generate_data.py"
-    # Depodaki örnek sızıntı dosyaları — aracı denemek için vardır.
+    # Sample leak files in the repository, there to try the tool out.
     - "test_data/**"
-    # Dokümantasyon, kural isimlerini ve örnek değerleri anlatır.
+    # Documentation describes rule names and example values.
     - "README.md"
     - "ROADMAP.md"
     - "rules/**"
@@ -49,7 +49,7 @@ allowlist:
   fingerprints: []
   patterns: []
 
-  # AWS'in dokümante örnek anahtarı, example.com adresleri vb.
+  # AWS's documented example key, example.com addresses, and so on.
   use_defaults: true
-  # `# sentinel:ignore` yorumları
+  # `# sentinel:ignore` comments
   inline: true

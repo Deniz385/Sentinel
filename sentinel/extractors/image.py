@@ -1,10 +1,10 @@
-"""Görsel OCR çıkarıcısı (çapraz platform).
+"""Image OCR extractor (cross-platform).
 
-v3.0'da Tesseract yolu kaynak kodda ``C:\\Program Files\\Tesseract-OCR``
-olarak sabitti; Linux ve macOS'ta OCR hiç çalışmıyordu. Burada motor
-sırayla aranır: yapılandırma → ortam değişkeni → ``PATH`` → bilinen
-kurulum dizinleri. Bulunamazsa OCR sessizce devre dışı kalır, tarama
-durmaz.
+In v3.0 the Tesseract path was hard-coded as the Windows install
+directory, so OCR never worked on Linux or macOS. Here the engine is
+looked up in order: configuration -> environment variable -> ``PATH``
+-> known install directories. If it is not found, OCR is disabled
+quietly and scanning continues.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import shutil
 
 EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"})
 
-#: Platforma göre bilinen Tesseract konumları.
+#: Known Tesseract locations per platform.
 _KNOWN_PATHS = (
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
@@ -23,12 +23,12 @@ _KNOWN_PATHS = (
     "/opt/homebrew/bin/tesseract",
 )
 
-#: Çok büyük görseller OCR'ı dakikalarca meşgul eder; önce küçültülür.
+#: Very large images keep OCR busy for minutes; they are downscaled first.
 _MAX_PIXELS = 4000 * 4000
 
 
 def find_tesseract(config=None) -> str | None:
-    """Tesseract çalıştırılabilirinin yolunu bulur."""
+    """Locate the Tesseract executable."""
     candidates = []
     if config is not None and getattr(config, "tesseract_cmd", ""):
         candidates.append(config.tesseract_cmd)
@@ -56,10 +56,10 @@ def ocr_available(config=None) -> bool:
 
 
 def get_ocr(config=None):
-    """OCR çağrılabiliri döndürür: ``callable(PIL.Image) -> str``.
+    """Return an OCR callable: ``callable(PIL.Image) -> str``.
 
-    OCR kullanılamıyorsa ``None`` döner — çağıran taraf buna göre karar
-    verir, istisna fırlatılmaz.
+    Returns ``None`` when OCR is unavailable - the caller decides what
+    to do; no exception is raised.
     """
     try:
         import pytesseract
@@ -76,7 +76,7 @@ def get_ocr(config=None):
         "TESSDATA_PREFIX", ""
     )
     if not tessdata:
-        # Çalıştırılabilirin yanındaki tessdata dizinini dene.
+        # Try the tessdata directory next to the executable.
         sibling = os.path.join(os.path.dirname(command), "tessdata")
         if os.path.isdir(sibling):
             tessdata = sibling
@@ -89,7 +89,7 @@ def get_ocr(config=None):
         try:
             return pytesseract.image_to_string(img, lang=langs)
         except Exception:
-            # İstenen dil paketi kurulu değilse İngilizceye düş.
+            # Fall back to English when the requested language pack is missing.
             try:
                 return pytesseract.image_to_string(img, lang="eng")
             except Exception:

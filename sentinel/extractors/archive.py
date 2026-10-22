@@ -1,19 +1,19 @@
-"""ZIP arşiv çıkarıcısı (özyinelemeli, zip-bomb korumalı).
+"""ZIP archive extractor (recursive, zip-bomb protected).
 
-`main.py` v3.0'da "ZIP" modülünü ilan ediyordu ama `scanner.py`'de ZIP
-desteği yoktu — depodaki eski `scan_results.csv` ise
-``secret_archive.zip::gizli_notlar.txt`` bulgusu içeriyor. Yani bu bir
-regresyondu; burada geri getirilir ve güvenli hâle getirilir.
+The v3.0 `main.py` advertised a "ZIP" module, but `scanner.py` had no
+ZIP support - while the old `scan_results.csv` in the repository
+contains a finding inside ``secret_archive.zip``. So this was
+a regression; it is restored here, and made safe.
 
-Arşiv taraması saldırı yüzeyidir, bu yüzden dört ayrı sınır uygulanır:
+Archive scanning is attack surface, so four separate limits apply:
 
-* **derinlik** — iç içe arşivlerle sonsuz özyineleme,
-* **üye sayısı** — milyonlarca küçük dosya,
-* **toplam açılmış bayt** — 42.zip tarzı bombalar,
-* **sıkıştırma oranı** — tek üyenin aşırı şişmesi,
+* **depth** - endless recursion through nested archives,
+* **member count** - millions of tiny files,
+* **total expanded bytes** - 42.zip style bombs,
+* **compression ratio** - a single member expanding absurdly,
 
-ve dizin dışına yazmayı deneyen yollar (`../`, mutlak yol, sembolik bağ)
-reddedilir.
+and member paths that try to write outside the directory (`../`, an
+absolute path, a symlink) are rejected.
 """
 
 from __future__ import annotations
@@ -27,10 +27,10 @@ from sentinel.extractors import TextChunk
 
 EXTENSIONS = frozenset({".zip", ".jar", ".war", ".apk", ".whl", ".egg", ".xpi"})
 
-#: Diske yazmadan bellekte taranacak üye boyutu üst sınırı.
+#: Size limit for members scanned in memory, without touching disk.
 _INLINE_LIMIT = 4 * 1024 * 1024
 
-#: Arşivden çıkarılıp ayrı bir çıkarıcıya verilecek üye uzantıları.
+#: Member extensions extracted and handed to a dedicated extractor.
 _NEEDS_FILE = frozenset(
     {
         ".pdf", ".docx", ".docm", ".dotx", ".xlsx", ".xlsm", ".xltx",
@@ -41,7 +41,7 @@ _NEEDS_FILE = frozenset(
 
 
 def _is_unsafe(name: str) -> bool:
-    """Dizin dışına çıkmaya çalışan üye adlarını reddet (zip slip)."""
+    """Reject member names that try to escape the directory (zip slip)."""
     if not name or name.endswith("/"):
         return True
     if os.path.isabs(name) or name.startswith(("/", "\\")):
@@ -80,7 +80,7 @@ def extract(path: str, config, depth: int = 0):
             if info.is_dir() or _is_unsafe(info.filename):
                 continue
 
-            # Sıkıştırma oranı bombası: 1 KB sıkıştırılmış, 1 GB açılmış.
+            # Compression-ratio bomb: 1 KB compressed, 1 GB expanded.
             if info.compress_size > 0:
                 ratio = info.file_size / info.compress_size
                 if ratio > max_ratio and info.file_size > 1024 * 1024:
@@ -106,7 +106,7 @@ def extract(path: str, config, depth: int = 0):
                     processed += 1
                     continue
             except (RuntimeError, zipfile.BadZipFile, OSError, NotImplementedError):
-                # Parola korumalı veya desteklenmeyen sıkıştırma: atla.
+                # Password protected or an unsupported compression method: skip.
                 continue
 
             total_bytes += info.file_size
@@ -114,7 +114,7 @@ def extract(path: str, config, depth: int = 0):
 
 
 def _via_tempfile(archive, info, member_display, container, config, depth: int):
-    """Üyeyi geçici dosyaya açıp uygun çıkarıcıya devreder."""
+    """Expand the member to a temp file and hand it to the right extractor."""
     from sentinel.extractors import extract as dispatch
 
     extension = os.path.splitext(info.filename)[1].lower() or ".bin"
@@ -133,6 +133,6 @@ def _via_tempfile(archive, info, member_display, container, config, depth: int):
             return
 
         for chunk in dispatch(temp_path, config, depth=depth + 1):
-            # Geçici yol kullanıcıya gösterilmemeli: arşiv içi konumla değiştir.
+            # The temp path must not reach the user: show the in-archive location.
             display = chunk.source.replace(temp_path, member_display, 1)
             yield TextChunk(chunk.text, display, chunk.line_offset, container)

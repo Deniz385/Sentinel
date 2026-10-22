@@ -1,8 +1,8 @@
-"""PDF metin çıkarıcısı.
+"""PDF text extractor.
 
-Sayfa sayfa üretir; 2000 sayfalık bir PDF'in tamamı belleğe alınmaz.
-İsteğe bağlı olarak sayfaya gömülü görseller OCR'dan geçirilir (taranmış
-kimlik fotokopileri bu yolla yakalanır).
+Yields page by page, so a 2000-page PDF never sits in memory as a
+whole. Optionally the images embedded in a page are put through OCR,
+which is how scanned copies of identity documents get caught.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def _reader(path: str):
     try:
         return PdfReader(path)
     except Exception:
-        # Bozuk/kesilmiş PDF: tek dosya yüzünden tarama düşmemeli.
+        # Corrupt or truncated PDF: one file must not fail the scan.
         return None
 
 
@@ -34,7 +34,7 @@ def extract(path: str, config):
         return
 
     if getattr(reader, "is_encrypted", False):
-        # Boş parola ile açılmayı dene (çok yaygın); olmazsa sessizce geç.
+        # Try an empty password (very common); otherwise skip quietly.
         try:
             reader.decrypt("")
         except Exception:
@@ -60,12 +60,12 @@ def extract(path: str, config):
 
         if parts:
             yield TextChunk(
-                "\n".join(parts), f"{path}::sayfa-{index}", 0, path
+                "\n".join(parts), f"{path}::page-{index}", 0, path
             )
 
 
 def _ocr_page_images(page, ocr, config):
-    """Sayfadaki gömülü görselleri OCR'dan geçirir."""
+    """Run OCR over the images embedded in a page."""
     import io
 
     try:
@@ -75,7 +75,7 @@ def _ocr_page_images(page, ocr, config):
 
     from PIL import Image
 
-    for embedded in images[:20]:  # sayfa başına üst sınır: OCR pahalı
+    for embedded in images[:20]:  # per-page cap: OCR is expensive
         try:
             with Image.open(io.BytesIO(embedded.data)) as img:
                 text = ocr(img)

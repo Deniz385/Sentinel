@@ -1,8 +1,8 @@
 """YARA motoru testleri.
 
-`rules/sample.yar` v3.0'da depoda duruyordu ama hiçbir kod onu
-okumuyordu. Bu testler kuralların gerçekten derlendiğini ve
-tetiklendiğini doğrular.
+In v3.0 `rules/sample.yar` sat in the repository but no code ever
+read it. These tests verify that the rules are genuinely compiled
+and do fire.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ PRIVATE_KEY = (
 
 
 class TestGracefulDegradation:
-    """yara-python olmadan da her şey çalışmaya devam etmeli."""
+    """Everything must keep working without yara-python."""
 
     def test_engine_reports_its_state(self):
         engine = YaraEngine(RULES_DIR)
@@ -43,13 +43,13 @@ class TestGracefulDegradation:
         assert engine.error
 
     def test_empty_directory_is_reported(self, tmp_path):
-        """Motor kapalıysa nedenini *söylemeli*, sessizce yutmamalı.
+        """A disabled engine must *say* why, not swallow it silently.
 
-        Kesin mesaj ortama bağlıdır: yara-python kuruluysa "kural
-        bulunamadı", değilse "yara-python kurulu değil". İkisi de geçerli
-        bir açıklamadır; testin ilgilendiği şey kullanıcının sebepsiz
-        bırakılmaması. Mesajın kendisi :class:`TestRules` içinde,
-        yara kuruluyken doğrulanır.
+        The exact message depends on the environment: with yara-python
+        installed it is "no rules found", otherwise "yara-python is not
+        installed". Both are valid explanations; what this test cares
+        about is that the user is not left without a reason. The message
+        itself is checked in :class:`TestRules`, with yara installed.
         """
         directory = tmp_path / "bos"
         directory.mkdir()
@@ -58,11 +58,11 @@ class TestGracefulDegradation:
         assert engine.error
 
     def test_engine_does_not_break_the_scan_without_yara(self, tmp_path):
-        """Motor kapalıyken bile `yara_enabled=True` tarama yapmalı."""
+        """A scan with `yara_enabled=True` must work even with the engine off."""
         from sentinel.config import ScanConfig
         from sentinel.engine import Scanner
 
-        (tmp_path / "a.txt").write_text("mail: deniz@adu.edu.tr\n", encoding="utf-8")
+        (tmp_path / "a.txt").write_text("mail: jane@university.edu\n", encoding="utf-8")
         config = ScanConfig(
             yara_enabled=True,
             yara_rules_dir=str(tmp_path / "olmayan"),
@@ -74,7 +74,7 @@ class TestGracefulDegradation:
         assert result.findings
 
 
-@pytest.mark.skipif(not yara_available(), reason="yara-python kurulu değil")
+@pytest.mark.skipif(not yara_available(), reason="yara-python is not installed")
 class TestRules:
     @pytest.fixture
     def engine(self):
@@ -87,12 +87,12 @@ class TestRules:
         assert engine.error is None
 
     def test_empty_rules_directory_names_the_reason(self, tmp_path):
-        """yara kuruluyken, boş dizinin gerekçesi açıkça söylenmeli."""
+        """With yara installed, an empty directory must state its reason."""
         directory = tmp_path / "bos"
         directory.mkdir()
         engine = YaraEngine(str(directory))
         assert not engine.enabled
-        assert "bulunamadı" in engine.error
+        assert "No .yar rules found" in engine.error
 
     def test_private_key_rule_fires(self, engine, tmp_path):
         path = tmp_path / "id_rsa"
@@ -111,8 +111,8 @@ class TestRules:
         assert any("Webshell" in f.type for f in engine.match_file(str(path)))
 
     def test_clean_file_does_not_fire(self, engine, tmp_path):
-        path = tmp_path / "temiz.txt"
-        path.write_text("Bu dosyada tamamen zararsiz metin var.\n", encoding="utf-8")
+        path = tmp_path / "clean.txt"
+        path.write_text("This file contains entirely harmless text.\n", encoding="utf-8")
         assert engine.match_file(str(path)) == []
 
     def test_severity_comes_from_rule_meta(self, engine, tmp_path):
@@ -124,28 +124,28 @@ class TestRules:
         assert finding.severity == "high"
 
     def test_invalid_severity_meta_falls_back(self, tmp_path):
-        """Kural dosyası bozuk bir severity yazarsa tarama düşmemeli."""
+        """A rule file with an invalid severity must not fail the scan."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "x.yar").write_text(
-            'rule Bozuk { meta: severity = "felaket" strings: $a = "TETIK" condition: $a }',
+            'rule Broken { meta: severity = "catastrophe" strings: $a = "TRIGGER" condition: $a }',
             encoding="utf-8",
         )
         target = tmp_path / "a.txt"
-        target.write_text("TETIK", encoding="utf-8")
+        target.write_text("TRIGGER", encoding="utf-8")
 
         engine = YaraEngine(str(rules_dir))
         finding = engine.match_file(str(target))[0]
-        assert finding.severity == "medium"  # varsayılana düştü
+        assert finding.severity == "medium"  # fell back to the default
 
     def test_broken_rule_file_is_reported(self, tmp_path):
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "bozuk.yar").write_text("rule { bu yara degil", encoding="utf-8")
+        (rules_dir / "broken.yar").write_text("rule { this is not yara", encoding="utf-8")
 
         engine = YaraEngine(str(rules_dir))
         assert not engine.enabled
-        assert "derleme hatası" in engine.error
+        assert "compile error" in engine.error
 
     def test_engine_integrates_with_the_scanner(self, tmp_path):
         from sentinel.config import ScanConfig
@@ -162,6 +162,6 @@ class TestRules:
         )
         result = Scanner(str(tmp_path), config=config).scan()
         types = {f.type for f in result.findings}
-        # Hem regex deseni hem YARA kuralı aynı dosyayı yakalar.
+        # Both a regex pattern and a YARA rule match the same file.
         assert "PRIVATE_KEY" in types
         assert any(name.startswith("YARA_") for name in types)

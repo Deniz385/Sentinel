@@ -1,9 +1,9 @@
-"""YARA kural motoru.
+"""The YARA rule engine.
 
-`rules/sample.yar` depoda duruyordu ama hiçbir kod onu okumuyordu — ölü
-bir dosyaydı. Burada gerçekten derlenip çalıştırılır. `yara-python`
-kurulu değilse motor devre dışı kalır ve tarama etkilenmez
-(``pip install sentinel-dlp[yara]``).
+`rules/sample.yar` sat in the repository but no code ever read it - a
+dead file. Here the rules are genuinely compiled and run. Without
+`yara-python` installed the engine stays disabled and scanning is
+unaffected (``pip install sentinel-dlp[yara]``).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from sentinel.severity import Severity
 
 __all__ = ["YaraEngine", "yara_available"]
 
-#: Kural meta alanında `severity` yoksa bu kullanılır.
+#: Used when a rule's meta section carries no `severity`.
 _DEFAULT_SEVERITY = Severity.MEDIUM
 
 
@@ -29,7 +29,7 @@ def yara_available() -> bool:
 
 
 class YaraEngine:
-    """Derlenmiş YARA kurallarını dosyalara uygular."""
+    """Apply compiled YARA rules to files."""
 
     def __init__(self, rules_dir: str = "rules"):
         self.rules_dir = rules_dir
@@ -41,11 +41,11 @@ class YaraEngine:
         try:
             import yara
         except ImportError:
-            self.error = "yara-python kurulu değil"
+            self.error = "yara-python is not installed"
             return
 
         if not os.path.isdir(self.rules_dir):
-            self.error = f"Kural dizini yok: {self.rules_dir}"
+            self.error = f"Rules directory not found: {self.rules_dir}"
             return
 
         sources = {}
@@ -54,13 +54,13 @@ class YaraEngine:
                 sources[os.path.splitext(os.path.basename(path))[0]] = path
 
         if not sources:
-            self.error = f"{self.rules_dir} içinde .yar kuralı bulunamadı"
+            self.error = f"No .yar rules found in {self.rules_dir}"
             return
 
         try:
             self.rules = yara.compile(filepaths=sources)
-        except Exception as exc:  # derleme hatası kullanıcıya bildirilmeli
-            self.error = f"YARA derleme hatası: {exc}"
+        except Exception as exc:  # a compile error must reach the user
+            self.error = f"YARA compile error: {exc}"
             self.rules = None
 
     @property
@@ -68,7 +68,7 @@ class YaraEngine:
         return self.rules is not None
 
     def match_file(self, path: str, display_path: str = "", file_sha: str = "N/A"):
-        """Dosyayı kurallara karşı eşleştirir ve bulgu listesi döndürür."""
+        """Match the file against the rules and return a list of findings."""
         if self.rules is None:
             return []
 
@@ -94,7 +94,7 @@ class YaraEngine:
                     type=f"YARA_{match.rule}",
                     title=f"YARA: {description}",
                     severity=severity.value,
-                    content_masked=f"<{len(match.strings)} imza eşleşmesi>",
+                    content_masked=f"<{len(match.strings)} signature matches>",
                     fingerprint="",
                     validated=True,
                     sha256=file_sha,

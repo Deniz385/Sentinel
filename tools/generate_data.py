@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Sentetik test verisi üreteci.
+"""Synthetic test data generator.
 
-Üretilen tüm değerler **algoritmik olarak doğru ama tamamen uydurma**dır;
-hiçbiri gerçek bir kişiye, hesaba ya da servise ait değildir. Amaç
-doğrulayıcıların ve performans davranışının gerçekçi veriyle sınanması.
+Every value produced here is **algorithmically valid but entirely
+invented**; none of it belongs to a real person, account or service.
+The point is to exercise the validators and performance behaviour
+against realistic data.
 
-v3.0'daki sürüm yalnızca tek bir büyük metin dosyası üretiyor ve boyutu
-`input()` ile soruyordu — yani CI'da çalıştırılamıyordu. Bu sürüm
-argümanla çalışır ve bir klasör ağacı kurar.
+The v3.0 version produced a single large text file and asked for its
+size with `input()`, so it could not run in CI. This version takes
+arguments and builds a directory tree.
 
-Kullanım:
-    python tools/generate_data.py --out demo_veri
-    python tools/generate_data.py --out demo_veri --big 50   # +50 MB dosya
+Usage:
+    python tools/generate_data.py --out demo_data
+    python tools/generate_data.py --out demo_data --big 50   # +50 MB file
 """
 
 from __future__ import annotations
@@ -21,11 +22,11 @@ import os
 import random
 import zipfile
 
-# --- geçerli değer üreteçleri ------------------------------------------
+# --- valid value generators --------------------------------------------
 
 
 def valid_tckn(rng: random.Random) -> str:
-    """TCKN algoritmasına uygun numara üretir."""
+    """Generate a number that satisfies the TCKN algorithm."""
     digits = [rng.randint(1, 9)] + [rng.randint(0, 9) for _ in range(8)]
     check_10 = ((sum(digits[0:9:2]) * 7) - sum(digits[1:8:2])) % 10
     check_11 = (sum(digits) + check_10) % 10
@@ -33,12 +34,12 @@ def valid_tckn(rng: random.Random) -> str:
 
 
 def valid_card(rng: random.Random, prefix: str = "4") -> str:
-    """Luhn'u geçen kart numarası (varsayılan: Visa)."""
+    """A card number that passes Luhn (Visa by default)."""
     body = [int(char) for char in prefix]
     body += [rng.randint(0, 9) for _ in range(15 - len(body))]
 
     checksum = 0
-    double = True  # son hane eklenince sondan ikinci 'double' olur
+    double = True  # once the check digit is appended, the second-to-last doubles
     for digit in reversed(body):
         value = digit * 2 if double else digit
         checksum += value - 9 if value > 9 else value
@@ -48,16 +49,16 @@ def valid_card(rng: random.Random, prefix: str = "4") -> str:
 
 
 def valid_tr_iban(rng: random.Random) -> str:
-    """Mod 97-10 kontrolünü geçen TR IBAN üretir."""
+    """Generate a Turkish IBAN that passes the mod 97-10 check."""
     body = "".join(str(rng.randint(0, 9)) for _ in range(22))
-    # TR00<body> dizesini sayıya çevirip kontrol hanelerini hesapla.
+    # Convert the TR00<body> string to a number and compute the check digits.
     numeric = int(body + "2927" + "00")
     check = 98 - (numeric % 97)
     return f"TR{check:02d}{body}"
 
 
 def invalid_tckn(rng: random.Random) -> str:
-    """11 haneli ama algoritmayı geçmeyen numara (yanlış pozitif yemi)."""
+    """Eleven digits that fail the algorithm (false-positive bait)."""
     while True:
         candidate = str(rng.randint(10_000_000_000, 99_999_999_999))
         digits = [int(d) for d in candidate]
@@ -66,8 +67,10 @@ def invalid_tckn(rng: random.Random) -> str:
             return candidate
 
 
-# --- dosya üreteçleri --------------------------------------------------
-_WORDS = ["lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "guvenlik", "veri", "analiz", "rapor", "musteri", "kayit", "islem", "sistem", "modul", "servis"]
+# --- file generators ---------------------------------------------------
+_WORDS = ["lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "security",
+          "data", "analysis", "report", "customer", "record", "transaction",
+          "system", "module", "service"]
 
 
 def _noise(rng: random.Random, count: int = 10) -> str:
@@ -76,30 +79,30 @@ def _noise(rng: random.Random, count: int = 10) -> str:
 
 def write_customer_file(path: str, rng: random.Random, rows: int = 40):
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("# Müşteri kayıtları (SENTETİK TEST VERİSİ)\n")
-        handle.write("tckn,telefon,eposta,iban\n")
+        handle.write("# Customer records (SYNTHETIC TEST DATA)\n")
+        handle.write("national_id,phone,email,iban\n")
         for index in range(rows):
             handle.write(
                 f"{valid_tckn(rng)},"
                 f"05{rng.randint(10, 59)}{rng.randint(1000000, 9999999)},"
-                f"kullanici{index}@ornek-firma.com.tr,"
+                f"user{index}@example-company.com,"
                 f"{valid_tr_iban(rng)}\n"
             )
 
 
 def write_payments_file(path: str, rng: random.Random, rows: int = 25):
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("# Ödeme kayıtları (SENTETİK TEST VERİSİ)\n")
+        handle.write("# Payment records (SYNTHETIC TEST DATA)\n")
         for _ in range(rows):
             brand_prefix = rng.choice(["4", "51", "52", "9792"])
             handle.write(
-                f"Ödeme alındı: {valid_card(rng, brand_prefix)} "
-                f"tutar={rng.randint(50, 5000)}₺\n"
+                f"Payment received: {valid_card(rng, brand_prefix)} "
+                f"amount={rng.randint(50, 5000)}\n"
             )
 
 
 def write_secrets_file(path: str, rng: random.Random):
-    """Koda sızmış kimlik bilgisi örnekleri (hepsi uydurma)."""
+    """Examples of credentials leaked into code (all invented)."""
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     aws_id = "AKIA" + "".join(rng.choices(alphabet, k=16))
     aws_secret = "".join(
@@ -107,7 +110,7 @@ def write_secrets_file(path: str, rng: random.Random):
     )
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(
-            "# SENTETİK test yapılandırması — hiçbiri gerçek değildir\n"
+            "# SYNTHETIC test configuration - none of this is real\n"
             f'AWS_ACCESS_KEY_ID = "{aws_id}"\n'
             f'aws_secret_access_key = "{aws_secret}"\n'
             f'DB_PASSWORD = "P4ssw0rd-{rng.randint(1000, 9999)}!"\n'
@@ -118,46 +121,47 @@ def write_secrets_file(path: str, rng: random.Random):
 
 
 def write_false_positive_file(path: str, rng: random.Random, rows: int = 30):
-    """Regex'e uyan ama geçersiz değerler — doğrulayıcı bunları elemeli."""
+    """Values that match the regex but are invalid - validators must drop them."""
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("# Yanlış pozitif yemi: regex uyar, algoritma tutmaz\n")
+        handle.write("# False-positive bait: the regex matches, the algorithm does not\n")
         for _ in range(rows):
             handle.write(
-                f"Hatalı TC girişi: {invalid_tckn(rng)} | "
-                f"sipariş no: {rng.randint(10**15, 10**16 - 1)} | "
+                f"Invalid national ID entry: {invalid_tckn(rng)} | "
+                f"order no: {rng.randint(10**15, 10**16 - 1)} | "
                 f"{_noise(rng, 6)}\n"
             )
-        handle.write("# Bunlar bastırılmalı (allowlist / satır içi):\n")
+        handle.write("# These must be suppressed (allowlist or inline):\n")
         handle.write('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
-        handle.write("iletisim: destek@example.com\n")
-        handle.write(f'TEST_TC = "{valid_tckn(rng)}"  # sentinel:ignore\n')
+        handle.write("contact: support@example.com\n")
+        handle.write(f'TEST_ID = "{valid_tckn(rng)}"  # sentinel:ignore\n')
 
 
 def write_archive(path: str, rng: random.Random):
-    """İç içe ZIP: arşiv taramasını sınar."""
-    inner = os.path.join(os.path.dirname(path), "_ic.zip")
+    """A nested ZIP, to exercise archive scanning."""
+    inner = os.path.join(os.path.dirname(path), "_inner.zip")
     with zipfile.ZipFile(inner, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
-            "derin/gizli_notlar.txt",
-            f"Yönetici TC: {valid_tckn(rng)}\nKart: {valid_card(rng)}\n",
+            "deep/secret_notes.txt",
+            f"Administrator ID: {valid_tckn(rng)}\nCard: {valid_card(rng)}\n",
         )
     try:
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(
-                "ik/personel.csv",
-                "tckn,ad\n" + "\n".join(f"{valid_tckn(rng)},Personel{i}" for i in range(10)),
+                "hr/staff.csv",
+                "national_id,name\n"
+                + "\n".join(f"{valid_tckn(rng)},Employee{i}" for i in range(10)),
             )
-            archive.write(inner, "arsiv_icinde.zip")
+            archive.write(inner, "nested_archive.zip")
     finally:
         if os.path.exists(inner):
             os.remove(inner)
 
 
 def write_big_file(path: str, rng: random.Random, megabytes: int):
-    """Akışlı okuma ve performansı sınamak için büyük dosya.
+    """A large file for exercising streaming reads and performance.
 
-    Bu dosya **asla commit edilmez**; `.gitignore` içindedir. v3.0'da
-    52 MB'lık bir kopyası depoya girmişti.
+    This file is **never committed**; it is in `.gitignore`. In v3.0 a
+    52 MB copy of it made it into the repository.
     """
     target = megabytes * 1024 * 1024
     written = 0
@@ -167,11 +171,11 @@ def write_big_file(path: str, rng: random.Random, megabytes: int):
         while written < target:
             roll = rng.random()
             if roll < 0.02:
-                line = f"Müşteri TC: {valid_tckn(rng)} onaylandı."
+                line = f"Customer ID: {valid_tckn(rng)} confirmed."
             elif roll < 0.04:
-                line = f"Ödeme: {valid_card(rng)} işlendi."
+                line = f"Payment: {valid_card(rng)} processed."
             elif roll < 0.08:
-                line = f"Hatalı TC: {invalid_tckn(rng)}"
+                line = f"Invalid ID: {invalid_tckn(rng)}"
             else:
                 line = _noise(rng, 12)
             line += "\n"
@@ -186,39 +190,39 @@ def write_big_file(path: str, rng: random.Random, megabytes: int):
 # ----------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Sentinel için sentetik test verisi üretir."
+        description="Generate synthetic test data for Sentinel."
     )
-    parser.add_argument("--out", "-o", default="demo_veri", help="Çıktı dizini")
+    parser.add_argument("--out", "-o", default="demo_data", help="Output directory")
     parser.add_argument(
         "--big",
         type=int,
         default=0,
         metavar="MB",
-        help="Ek olarak bu boyutta büyük bir metin dosyası üret (0 = üretme)",
+        help="Also generate a large text file of this size in MB (0 = none)",
     )
-    parser.add_argument("--seed", type=int, default=None, help="Tekrarlanabilirlik için")
+    parser.add_argument("--seed", type=int, default=None, help="For reproducibility")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
     out = args.out
-    os.makedirs(os.path.join(out, "ik"), exist_ok=True)
-    os.makedirs(os.path.join(out, "finans"), exist_ok=True)
+    os.makedirs(os.path.join(out, "hr"), exist_ok=True)
+    os.makedirs(os.path.join(out, "finance"), exist_ok=True)
 
-    print(f"Sentetik veri üretiliyor: {out}/")
-    write_customer_file(os.path.join(out, "ik", "musteriler.csv"), rng)
-    write_payments_file(os.path.join(out, "finans", "odemeler.txt"), rng)
-    write_secrets_file(os.path.join(out, ".env.ornek"), rng)
-    write_false_positive_file(os.path.join(out, "yanlis_pozitif.txt"), rng)
-    write_archive(os.path.join(out, "arsiv.zip"), rng)
+    print(f"Generating synthetic data: {out}/")
+    write_customer_file(os.path.join(out, "hr", "customers.csv"), rng)
+    write_payments_file(os.path.join(out, "finance", "payments.txt"), rng)
+    write_secrets_file(os.path.join(out, ".env.example"), rng)
+    write_false_positive_file(os.path.join(out, "false_positives.txt"), rng)
+    write_archive(os.path.join(out, "archive.zip"), rng)
 
     if args.big > 0:
         path = os.path.join(out, "big_test_data.txt")
-        print(f"{args.big} MB'lık dosya üretiliyor: {path}")
+        print(f"Generating a {args.big} MB file: {path}")
         write_big_file(path, rng, args.big)
 
-    print("\nTamam. Şimdi deneyin:")
+    print("\nDone. Now try:")
     print(f"  sentinel scan {out} --format html --verbose")
-    print("\nNOT: Üretilen veriler sentetiktir; depoya commit ETMEYİN.")
+    print("\nNOTE: the generated data is synthetic; do NOT commit it.")
     return 0
 
 

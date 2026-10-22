@@ -1,25 +1,27 @@
-"""Karantina kasası — AES-256-GCM.
+"""The quarantine vault - AES-256-GCM.
 
-v3.0'ın "şifrelemesi" ``base64(reverse(bytes))`` idi. Bu şifreleme
-değil, gizlemedir: karantinaya alınan KVKK verisi fiilen açıktaydı ve
-tek satır kodla geri okunabiliyordu. Ayrıca orijinal dosya, şifreli
-kopya **doğrulanmadan** siliniyordu; şifreli kopya bozuksa veri kalıcı
-olarak kayboluyordu.
+The v3.0 "encryption" was ``base64(reverse(bytes))``. That is not
+encryption but obfuscation: quarantined personal data was effectively in
+the clear and recoverable in one line of code. Worse, the original file
+was deleted **without verifying** the encrypted copy; if that copy was
+corrupt the data was gone for good.
 
-Bu modül şunları garanti eder:
+This module guarantees:
 
-* **Gerçek şifreleme**: AES-256-GCM (kimlik doğrulamalı). Başlık AAD
-  olarak bağlanır, yani manifest kurcalanırsa çözme başarısız olur.
-* **Doğrulanmış silme**: orijinal dosya, şifreli kopya tekrar çözülüp
-  SHA-256'sı eşleştikten *sonra* silinir.
-* **Atomik yazma**: geçici dosya + ``os.replace``; yarım kalmış .enc yok.
-* **Eski format uyumu**: v3.0 base64 dosyaları ve ``.enc.meta`` /
-  ``karantina_kayitlari.json`` kayıtları okunmaya devam eder.
+* **Real encryption**: AES-256-GCM (authenticated). The header is bound
+  as AAD, so tampering with the manifest makes decryption fail.
+* **Verified deletion**: the original is removed only *after* the
+  encrypted copy has been decrypted again and its SHA-256 matched.
+* **Atomic writes**: a temporary file plus ``os.replace``; no half
+  written .enc files.
+* **Legacy compatibility**: v3.0 base64 files and ``.enc.meta`` /
+  ``karantina_kayitlari.json`` records remain readable.
 
-Anahtar yönetimi: ``SENTINEL_VAULT_KEY`` ortam değişkeni (base64/hex) >
-yapılandırılmış anahtar dosyası > ``~/.sentinel/vault.key`` (ilk
-kullanımda 0600 izniyle üretilir). Anahtar **kasa dizininin dışında**
-tutulur; aynı dizinde olsa şifrelemenin anlamı kalmazdı.
+Key management: the ``SENTINEL_VAULT_KEY`` environment variable
+(base64/hex) > a configured key file > ``~/.sentinel/vault.key``
+(generated with 0600 permissions on first use). The key is kept
+**outside the vault directory**; in the same directory the encryption
+would be pointless.
 """
 
 from __future__ import annotations
@@ -46,11 +48,11 @@ _SHRED_PASSES = 1
 
 
 class VaultError(Exception):
-    """Karantina işlemi başarısız."""
+    """A quarantine operation failed."""
 
 
 # ---------------------------------------------------------------------------
-# Anahtar yönetimi
+# Key management
 # ---------------------------------------------------------------------------
 def default_key_path() -> str:
     base = os.environ.get("SENTINEL_HOME") or os.path.join(
@@ -72,14 +74,14 @@ def _decode_key(raw: str) -> bytes:
             continue
         if len(key) == _KEY_SIZE:
             return key
-    # Serbest biçimli bir parola verildiyse ondan anahtar türet.
+    # When a free-form passphrase was given, derive a key from it.
     return hashlib.scrypt(
         raw.encode("utf-8"), salt=b"sentinel-vault-v2", n=2**14, r=8, p=1, dklen=_KEY_SIZE
     )
 
 
 def load_or_create_key(key_path: str | None = None) -> bytes:
-    """Kasa anahtarını yükler; yoksa üretip 0600 izniyle kaydeder."""
+    """Load the vault key; generate and store it with 0600 if absent."""
     env_key = os.environ.get("SENTINEL_VAULT_KEY")
     if env_key:
         return _decode_key(env_key)
@@ -92,8 +94,9 @@ def load_or_create_key(key_path: str | None = None) -> bytes:
     key = os.urandom(_KEY_SIZE)
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
-    # Dosyayı doğrudan kısıtlı izinle oluştur: önce yazıp sonra chmod
-    # yapmak, aradaki pencerede anahtarı okunabilir bırakır.
+    # Create the file with restricted permissions from the start:
+    # writing first and chmod-ing after leaves the key readable in
+    # between.
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(base64.b64encode(key).decode("ascii"))
@@ -106,9 +109,9 @@ def load_or_create_key(key_path: str | None = None) -> bytes:
 
 # ---------------------------------------------------------------------------
 class QuarantineManager:
-    """Şifreli karantina kasasını yönetir."""
+    """Manage the encrypted quarantine vault."""
 
-    #: v3.0 ve ara sürümlerde kullanılmış dizin adları.
+    #: Directory names used by v3.0 and intermediate versions.
     LEGACY_DIRS = ("KARANTINA_BOLGESI", "QUARANTINE_ZONE")
 
     def __init__(self, quarantine_dir: str = "KARANTINA_BOLGESI", key_path: str | None = None):
@@ -119,7 +122,7 @@ class QuarantineManager:
         self._key: bytes | None = None
         os.makedirs(self.q_dir, exist_ok=True)
 
-    # -- anahtar ----------------------------------------------------------
+    # -- key ----------------------------------------------------------------
     @property
     def key(self) -> bytes:
         if self._key is None:
@@ -139,13 +142,13 @@ class QuarantineManager:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except ImportError as exc:  # pragma: no cover
             raise VaultError(
-                "Karantina için `cryptography` gerekli: pip install cryptography"
+                "Quarantine requires `cryptography`: pip install cryptography"
             ) from exc
         return AESGCM(self.key)
 
     # -- manifest ---------------------------------------------------------
     def _get_logs(self) -> dict:
-        """Manifesti okur; eski (v3.0) manifesti de birleştirir."""
+        """Read the manifest, merging in the legacy (v3.0) manifest."""
         logs: dict = {}
         for path in (self.legacy_log_file, self.log_file):
             if not os.path.isfile(path):
@@ -166,7 +169,7 @@ class QuarantineManager:
         os.replace(temp, self.log_file)
 
     def list_items(self) -> list:
-        """Kasadaki dosyaları manifest bilgisiyle birlikte listeler."""
+        """List the files in the vault together with their manifest data."""
         logs = self._get_logs()
         items = []
         for name in sorted(os.listdir(self.q_dir)):
@@ -186,7 +189,7 @@ class QuarantineManager:
         return items
 
     def _legacy_sidecar_path(self, enc_name: str) -> str | None:
-        """v3.0'ın ``<dosya>.enc.meta`` yan dosyasından orijinal yolu okur."""
+        """Read the original path from the v3.0 ``<file>.enc.meta`` sidecar."""
         for candidate in (
             os.path.join(self.q_dir, f"{enc_name}.meta"),
             os.path.join(self.q_dir, f"{enc_name.removesuffix('.enc')}.enc.meta"),
@@ -199,7 +202,7 @@ class QuarantineManager:
                     return None
         return None
 
-    # -- şifreleme --------------------------------------------------------
+    # -- encryption -----------------------------------------------------------
     @staticmethod
     def _is_modern(path: str) -> bool:
         try:
@@ -209,10 +212,10 @@ class QuarantineManager:
             return False
 
     def _encrypt(self, data: bytes, header: dict) -> bytes:
-        """`MAGIC | başlık_uzunluğu | başlık | nonce | şifreli metin`.
+        """`MAGIC | header_length | header | nonce | ciphertext`.
 
-        Başlık AAD olarak bağlanır: manifest/başlık değiştirilirse çözme
-        kimlik doğrulama hatasıyla başarısız olur.
+        The header is bound as AAD: if the manifest or header is
+        modified, decryption fails with an authentication error.
         """
         header_bytes = json.dumps(header, ensure_ascii=False, sort_keys=True).encode(
             "utf-8"
@@ -243,38 +246,38 @@ class QuarantineManager:
             plaintext = self._aesgcm().decrypt(nonce, ciphertext, header_bytes)
         except Exception as exc:
             raise VaultError(
-                "Çözme başarısız: anahtar yanlış ya da dosya kurcalanmış."
+                "Decryption failed: wrong key, or the file was tampered with."
             ) from exc
 
         return plaintext, json.loads(header_bytes.decode("utf-8"))
 
     @staticmethod
     def _decrypt_legacy(blob: bytes) -> bytes:
-        """v3.0 formatı: ``base64(reverse(bytes))``.
+        """The v3.0 format: ``base64(reverse(bytes))``.
 
-        Güvenli değildi ama kullanıcıların kasasında bu dosyalar var;
-        okunabilir kalmalılar.
+        It was not secure, but users have these files in their vaults;
+        they must stay readable.
         """
         try:
             return base64.b64decode(blob)[::-1]
         except Exception as exc:
-            raise VaultError("Eski formatlı karantina dosyası okunamadı.") from exc
+            raise VaultError("Could not read the legacy-format quarantine file.") from exc
 
-    # -- genel API --------------------------------------------------------
+    # -- public API -----------------------------------------------------------
     def quarantine_file(self, filepath: str, shred: bool = False) -> tuple[bool, str]:
-        """Dosyayı şifreleyip kasaya alır, sonra orijinalini siler.
+        """Encrypt the file into the vault, then delete the original.
 
-        Silme işlemi **yalnızca** şifreli kopya geri çözülüp SHA-256'sı
-        orijinalle eşleştikten sonra yapılır.
+        Deletion happens **only** after the encrypted copy has been
+        decrypted again and its SHA-256 matched against the original.
         """
         if not os.path.isfile(filepath):
-            return False, f"Dosya bulunamadı: {filepath}"
+            return False, f"File not found: {filepath}"
 
         try:
             with open(filepath, "rb") as handle:
                 content = handle.read()
         except OSError as exc:
-            return False, f"Okunamadı: {exc}"
+            return False, f"Could not read: {exc}"
 
         digest = hashlib.sha256(content).hexdigest()
         filename = os.path.basename(filepath)
@@ -296,7 +299,7 @@ class QuarantineManager:
         except VaultError as exc:
             return False, str(exc)
 
-        # Atomik yazma: yarım dosya kasada kalmasın.
+        # Atomic write, so no half-written file is left in the vault.
         descriptor, temp_path = tempfile.mkstemp(dir=self.q_dir, suffix=".tmp")
         try:
             with os.fdopen(descriptor, "wb") as handle:
@@ -304,19 +307,19 @@ class QuarantineManager:
             os.replace(temp_path, enc_path)
         except OSError as exc:
             _silent_remove(temp_path)
-            return False, f"Kasaya yazılamadı: {exc}"
+            return False, f"Could not write to the vault: {exc}"
 
-        # DOĞRULA: çözülüp aynı içeriği veriyor mu?
+        # VERIFY: does it decrypt back to the same content?
         try:
             with open(enc_path, "rb") as handle:
                 restored, _ = self._decrypt(handle.read())
         except VaultError as exc:
             _silent_remove(enc_path)
-            return False, f"Doğrulama başarısız, orijinal korundu: {exc}"
+            return False, f"Verification failed, original kept: {exc}"
 
         if hashlib.sha256(restored).hexdigest() != digest:
             _silent_remove(enc_path)
-            return False, "Doğrulama başarısız (hash uyuşmadı), orijinal korundu."
+            return False, "Verification failed (hash mismatch), original kept."
 
         logs = self._get_logs()
         logs[enc_name] = header
@@ -329,7 +332,7 @@ class QuarantineManager:
                 os.remove(filepath)
         except OSError as exc:
             return True, (
-                f"Şifreli kopya oluşturuldu ama orijinal silinemedi: {exc}"
+                f"Encrypted copy created but the original could not be deleted: {exc}"
             )
 
         return True, enc_path
@@ -337,13 +340,13 @@ class QuarantineManager:
     def restore_file(
         self, enc_filepath: str, target_path: str | None = None, force: bool = False
     ) -> tuple[bool, str]:
-        """Dosyayı çözüp orijinal konumuna geri koyar."""
+        """Decrypt the file and restore it to its original location."""
         if not os.path.isabs(enc_filepath):
             candidate = os.path.join(self.q_dir, enc_filepath)
             enc_filepath = candidate if os.path.isfile(candidate) else enc_filepath
 
         if not os.path.isfile(enc_filepath):
-            return False, f"Karantina dosyası bulunamadı: {enc_filepath}"
+            return False, f"Quarantine file not found: {enc_filepath}"
 
         name = os.path.basename(enc_filepath)
         logs = self._get_logs()
@@ -362,7 +365,7 @@ class QuarantineManager:
             or self._legacy_sidecar_path(name)
         )
         if not destination:
-            # Kayıt yoksa proje dizinine, isimden türeterek çıkar.
+            # With no record, derive a name and restore into the project dir.
             clean = name.removesuffix(".enc")
             parts = clean.split("_", 2)
             clean = parts[-1] if len(parts) == 3 else clean
@@ -370,12 +373,12 @@ class QuarantineManager:
 
         expected = info.get("sha256") or header.get("sha256")
         if expected and hashlib.sha256(content).hexdigest() != expected:
-            return False, "Bütünlük hatası: içerik manifestteki hash ile uyuşmuyor."
+            return False, "Integrity error: content does not match the manifest hash."
 
         if os.path.exists(destination) and not force:
             return False, (
-                f"Hedefte dosya var, üzerine yazılmadı: {destination} "
-                "(--force ile zorlayabilirsiniz)"
+                f"A file exists at the destination, not overwritten: {destination} "
+                "(use --force to override)"
             )
 
         directory = os.path.dirname(os.path.abspath(destination))
@@ -388,7 +391,7 @@ class QuarantineManager:
                 handle.write(content)
             os.replace(temp_path, destination)
         except OSError as exc:
-            return False, f"Geri yazılamadı: {exc}"
+            return False, f"Could not write it back: {exc}"
 
         _silent_remove(enc_filepath)
         _silent_remove(f"{enc_filepath}.meta")
@@ -399,7 +402,7 @@ class QuarantineManager:
         return True, destination
 
     def verify_all(self) -> list:
-        """Kasadaki her dosyanın çözülebilirliğini ve bütünlüğünü sınar."""
+        """Test every vault file for decryptability and integrity."""
         results = []
         for item in self.list_items():
             path = os.path.join(self.q_dir, item["name"])
@@ -414,15 +417,15 @@ class QuarantineManager:
 
             expected = item.get("sha256") or header.get("sha256")
             if expected and hashlib.sha256(content).hexdigest() != expected:
-                entry["detail"] = "hash uyuşmuyor"
+                entry["detail"] = "hash mismatch"
             else:
                 entry["ok"] = True
-                entry["detail"] = "eski format" if item.get("legacy") else "tamam"
+                entry["detail"] = "legacy format" if item.get("legacy") else "ok"
             results.append(entry)
         return results
 
     def purge(self, name: str | None = None, shred: bool = False) -> int:
-        """Kasadan kalıcı olarak siler. `name` yoksa tüm kasa boşaltılır."""
+        """Delete permanently from the vault. Without `name`, empty it all."""
         targets = (
             [name]
             if name
@@ -445,10 +448,11 @@ class QuarantineManager:
         return removed
 
     def reveal(self, path: str) -> bool:
-        """Dosyayı işletim sisteminin dosya yöneticisinde gösterir.
+        """Reveal the file in the operating system's file manager.
 
-        v3.0 burada `subprocess`'i import etmeyi unutmuştu; hata çıplak
-        ``except`` içinde yutuluyordu. Artık çapraz platform ve açık.
+        v3.0 forgot to import `subprocess` here and the resulting error
+        was swallowed by a bare ``except``. Now cross-platform and
+        explicit.
         """
         import subprocess
         import sys
@@ -475,10 +479,11 @@ def _silent_remove(path: str):
 
 
 def _shred(path: str, passes: int = _SHRED_PASSES):
-    """Dosyayı rastgele veriyle üzerine yazıp siler.
+    """Overwrite the file with random data and delete it.
 
-    SSD/COW dosya sistemlerinde kesin güvence vermez (aşınma dengeleme
-    eski blokları tutabilir), bu yüzden varsayılan değildir.
+    This gives no firm guarantee on SSD or copy-on-write filesystems
+    (wear levelling may retain old blocks), which is why it is not the
+    default.
     """
     try:
         size = os.path.getsize(path)
@@ -498,7 +503,7 @@ def _shred(path: str, passes: int = _SHRED_PASSES):
 
 
 def migrate_legacy_dirs(target_dir: str) -> int:
-    """Eski karantina dizinlerindeki dosyaları yeni kasaya taşır."""
+    """Move files from legacy quarantine directories into the new vault."""
     manager = QuarantineManager(target_dir)
     moved = 0
     for legacy in QuarantineManager.LEGACY_DIRS:

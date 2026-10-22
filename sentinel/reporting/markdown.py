@@ -1,7 +1,7 @@
-"""Markdown özeti — pull request yorumu ve CI iş özeti için.
+"""Markdown summary, for pull-request comments and CI job summaries.
 
-``GITHUB_STEP_SUMMARY``'ye yazıldığında tarama sonucu doğrudan Actions
-çalıştırma sayfasında görünür.
+Written to ``GITHUB_STEP_SUMMARY``, the scan result appears directly on
+the Actions run page.
 """
 
 from __future__ import annotations
@@ -17,71 +17,71 @@ MAX_GROUPS = 20
 
 
 def _escape(value: str) -> str:
-    """Tablo hücresini bozabilecek karakterleri etkisizleştirir."""
+    """Neutralise characters that would break a table cell."""
     return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", "")
 
 
 def render(result) -> str:
     counts = result.counts_by_severity()
     lines = [
-        "# Sentinel DLP Tarama Raporu",
+        "# Sentinel DLP Scan Report",
         "",
-        f"- **Hedef:** `{_escape(result.target)}`",
-        f"- **Risk skoru:** {result.risk_score}/100",
-        f"- **Bulgu:** {len(result.findings)} "
-        f"(**{result.unique_count}** tekil sır)",
-        f"- **Taranan dosya:** {result.files_scanned} "
-        f"(atlanan: {result.files_skipped})",
-        f"- **Süre:** {result.duration:.2f} sn",
+        f"- **Target:** `{_escape(result.target)}`",
+        f"- **Risk score:** {result.risk_score}/100",
+        f"- **Findings:** {len(result.findings)} "
+        f"(**{result.unique_count}** unique secrets)",
+        f"- **Files scanned:** {result.files_scanned} "
+        f"(skipped: {result.files_skipped})",
+        f"- **Duration:** {result.duration:.2f} s",
         "",
     ]
     if result.files_cached:
         lines.insert(
             -1,
-            f"- **Önbellekten geçilen dosya:** {result.files_cached} "
-            "(içeriği değişmemiş)",
+            f"- **Files served from cache:** {result.files_cached} "
+            "(content unchanged)",
         )
 
     if not result.findings:
-        lines.append("✅ **Eşik üstü hassas veri bulunamadı.**")
+        lines.append("✅ **No sensitive data at or above the threshold.**")
         return "\n".join(lines) + "\n"
 
-    lines.append("## Önem derecesi dağılımı")
+    lines.append("## Severity distribution")
     lines.append("")
-    lines.append("| Önem | Adet |")
+    lines.append("| Severity | Count |")
     lines.append("| --- | ---: |")
     for severity in sorted(Severity, key=lambda s: -s.rank):
         count = counts.get(severity.value, 0)
         if count:
-            lines.append(f"| {severity.icon} {severity.label_tr} | {count} |")
+            lines.append(f"| {severity.icon} {severity.label} | {count} |")
     lines.append("")
 
     shared = result.shared_secrets()
     if shared:
-        # Önce bunlar: aynı değerin N dosyadaki kopyası tek bir işle
-        # (anahtarı iptal et / veriyi kaldır) kapanır.
-        lines.append("## Birden fazla dosyaya kopyalanmış sırlar")
+        # These come first: N copies of one value close with a single
+        # action (revoke the key, remove the data).
+        lines.append("## Secrets copied into more than one file")
         lines.append("")
-        lines.append("| Önem | Tür | Dosya | Bulgu | İçerik (maskeli) |")
+        lines.append("| Severity | Type | Files | Findings | Content (masked) |")
         lines.append("| --- | --- | ---: | ---: | --- |")
         for group in shared[:MAX_GROUPS]:
             lines.append(
-                f"| {group.severity_enum.label_tr} | `{_escape(group.type)}` "
+                f"| {group.severity_enum.label} | `{_escape(group.type)}` "
                 f"| {group.file_count} | {group.count} "
                 f"| `{_escape(group.content_masked)}` |"
             )
         if len(shared) > MAX_GROUPS:
             lines.append("")
-            lines.append(f"_… ve {len(shared) - MAX_GROUPS} sır daha._")
+            lines.append(f"_… and {len(shared) - MAX_GROUPS} more secrets._")
         lines.append("")
 
-    lines.append("## Bulgular")
+    lines.append("## Findings")
     lines.append("")
-    lines.append("| Önem | Tür | Konum | Satır | İçerik (maskeli) |")
+    lines.append("| Severity | Type | Location | Line | Content (masked) |")
     lines.append("| --- | --- | --- | ---: | --- |")
     for finding in result.findings[:MAX_ROWS]:
         lines.append(
-            f"| {finding.severity_enum.label_tr} | `{_escape(finding.type)}` "
+            f"| {finding.severity_enum.label} | `{_escape(finding.type)}` "
             f"| `{_escape(finding.file)}` | {finding.line} "
             f"| `{_escape(finding.content_masked)}` |"
         )
@@ -89,10 +89,10 @@ def render(result) -> str:
     remaining = len(result.findings) - MAX_ROWS
     if remaining > 0:
         lines.append("")
-        lines.append(f"_… ve {remaining} bulgu daha (tam liste: JSON/CSV raporu)._")
+        lines.append(f"_… and {remaining} more findings (full list: JSON/CSV report)._")
 
     lines.append("")
-    lines.append("> Tüm hassas değerler maskelenmiştir.")
+    lines.append("> All sensitive values are masked.")
     return "\n".join(lines) + "\n"
 
 

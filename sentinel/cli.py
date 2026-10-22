@@ -1,14 +1,14 @@
-"""Komut satırı arayüzü.
+"""The command-line interface.
 
-v3.0'da tek bir `main.py` vardı: üç argüman, çıkış kodu hep 0, OCR ve
-karantina anahtarları erişilemezdi. Buradaki CLI alt komutlara ayrılır ve
-**anlamlı çıkış kodları** döndürür — bu olmadan CI entegrasyonu mümkün
-değildir:
+v3.0 had a single `main.py`: three arguments, an exit code that was
+always 0, and no way to reach the OCR or quarantine switches. This CLI
+is split into subcommands and returns **meaningful exit codes** -
+without them CI integration is impossible:
 
-* ``0`` — temiz (ya da eşik altında bulgu)
-* ``1`` — ``--fail-on`` eşiğinde veya üstünde bulgu var
-* ``2`` — çalıştırma hatası
-* ``130`` — kullanıcı iptal etti (Ctrl-C)
+* ``0`` - clean (or findings below the threshold)
+* ``1`` - findings at or above the ``--fail-on`` threshold
+* ``2`` - execution error
+* ``130`` - cancelled by the user (Ctrl-C)
 """
 
 from __future__ import annotations
@@ -30,21 +30,21 @@ EXIT_INTERRUPTED = 130
 
 
 def _ensure_utf8_output():
-    """Çıktı akışlarının Türkçe karakterleri taşıyabildiğinden emin olur.
+    """Make sure the output streams can carry non-ASCII characters.
 
-    Windows'ta çıktı bir dosyaya ya da boruya yönlendirildiğinde Python
-    konsol yazıcısını değil, sistemin eski kod sayfasını (genelde cp1252)
-    kullanır. O kod sayfasında ``ş`` yoktur, dolayısıyla ilk Türkçe
-    karakterde ``UnicodeEncodeError`` fırlar:
+    On Windows, when output is redirected to a file or a pipe, Python
+    uses the system's legacy code page (usually cp1252) rather than the
+    console writer. That code page has no Turkish letters, so the first
+    one raises ``UnicodeEncodeError``:
 
-        sentinel doctor > rapor.txt
-        [HATA] 'charmap' codec can't encode character '\\u015f'
+        sentinel doctor > report.txt
+        [ERROR] 'charmap' codec can't encode character '\\u015f'
 
-    Bu, aracı Windows'ta her türlü yönlendirmede, betikte ve CI adımında
-    kullanılamaz hâle getiriyordu. UTF-8'e geçmek dosya/boru durumunu
-    doğru yazar; ``errors="replace"`` ise hangi kod sayfası olursa olsun
-    çıktının **asla** çökmemesini garanti eder — bir güvenlik aracı,
-    raporunu yazarken bir harf yüzünden ölmemelidir.
+    This made the tool unusable on Windows in any redirection, script or
+    CI step. Switching to UTF-8 writes the file or pipe correctly, and
+    ``errors="replace"`` guarantees the output **never** crashes
+    whatever the code page - a security tool must not die over one
+    letter while writing its report.
     """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -53,8 +53,9 @@ def _ensure_utf8_output():
         try:
             reconfigure(encoding="utf-8", errors="replace")
         except (ValueError, OSError, AttributeError):
-            # Akış değiştirilemiyorsa (yakalanmış/sarmalanmış olabilir)
-            # en azından kayıp karakterleri çökmeden geçmeyi dene.
+            # If the stream cannot be reconfigured (it may be captured
+            # or wrapped), at least try to pass lost characters through
+            # without crashing.
             try:
                 reconfigure(errors="replace")
             except Exception:
@@ -66,12 +67,12 @@ _BANNER = r"""
   \___ \ / _ \ '_ \| __| | '_ \ / _ \ |
    ___) |  __/ | | | |_| | | | |  __/ |
   |____/ \___|_| |_|\__|_|_| |_|\___|_|   v{version}
-  Hassas Veri Keşif ve Sızıntı Önleme (DLP)
+  Sensitive Data Discovery and Loss Prevention (DLP)
 """
 
 
 # ---------------------------------------------------------------------------
-# Renkli çıktı (TTY değilse ya da NO_COLOR varsa düz metin)
+# Coloured output (plain text when not a TTY, or when NO_COLOR is set)
 # ---------------------------------------------------------------------------
 class _Style:
     def __init__(self, enabled: bool):
@@ -123,10 +124,10 @@ def _make_style(no_color: bool) -> _Style:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sentinel",
-        description="Sentinel — hassas veri keşif ve sızıntı önleme aracı.",
+        description="Sentinel - sensitive data discovery and loss prevention.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Örnekler:\n"
+            "Examples:\n"
             "  sentinel scan ~/Belgeler --format html,csv\n"
             "  sentinel scan . --fail-on high --format sarif\n"
             "  sentinel scan . --ocr --quarantine --min-severity high\n"
@@ -136,117 +137,117 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--version", action="version", version=f"Sentinel {__version__}")
-    parser.add_argument("--no-color", action="store_true", help="ANSI renklerini kapat")
+    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colours")
     subparsers = parser.add_subparsers(dest="command")
 
     # -- scan -------------------------------------------------------------
-    scan = subparsers.add_parser("scan", help="Bir dizini veya dosyayı tara")
-    scan.add_argument("target", nargs="?", default=None, help="Taranacak yol")
-    scan.add_argument("--target", "-t", dest="target_opt", help="Taranacak yol (eski biçim)")
-    scan.add_argument("--output", "-o", default=".", help="Rapor dizini (varsayılan: .)")
+    scan = subparsers.add_parser("scan", help="Scan a directory or a file")
+    scan.add_argument("target", nargs="?", default=None, help="Path to scan")
+    scan.add_argument("--target", "-t", dest="target_opt", help="Path to scan (legacy form)")
+    scan.add_argument("--output", "-o", default=".", help="Report directory (default: .)")
     scan.add_argument(
         "--format",
         "-f",
         default="html,csv",
-        help="Rapor biçimleri: html,csv,json,sarif,md,pdf (virgülle)",
+        help="Report formats: html,csv,json,sarif,md,pdf (comma separated)",
     )
-    scan.add_argument("--no-report", action="store_true", help="Hiç rapor yazma")
-    scan.add_argument("--config", "-c", help="Yapılandırma dosyası (sentinel.yml)")
-    scan.add_argument("--min-severity", help="Bu dereceden düşük bulguları yoksay")
+    scan.add_argument("--no-report", action="store_true", help="Write no reports")
+    scan.add_argument("--config", "-c", help="Configuration file (sentinel.yml)")
+    scan.add_argument("--min-severity", help="Ignore findings below this severity")
     scan.add_argument(
         "--fail-on",
-        help="Bu derecede/üstünde bulgu varsa 1 ile çık (CI kapısı)",
+        help="Exit 1 when findings reach this severity (CI gate)",
     )
-    scan.add_argument("--only", help="Sadece bu kurallar/etiketler (virgülle)")
-    scan.add_argument("--skip-rules", help="Bu kuralları atla (virgülle)")
-    scan.add_argument("--exclude", action="append", default=[], help="Glob ile dışla")
-    scan.add_argument("--workers", "-j", type=int, help="Paralel işçi sayısı (0=otomatik)")
+    scan.add_argument("--only", help="Only these rules or tags (comma separated)")
+    scan.add_argument("--skip-rules", help="Skip these rules (comma separated)")
+    scan.add_argument("--exclude", action="append", default=[], help="Exclude by glob")
+    scan.add_argument("--workers", "-j", type=int, help="Parallel workers (0 = automatic)")
     scan.add_argument(
-        "--executor", choices=("auto", "process", "thread", "serial"), help="Yürütme modu"
+        "--executor", choices=("auto", "process", "thread", "serial"), help="Execution mode"
     )
-    scan.add_argument("--max-size", type=int, help="Azami dosya boyutu (bayt)")
-    scan.add_argument("--ocr", action="store_true", help="Görsellerde OCR taraması")
-    scan.add_argument("--no-archives", action="store_true", help="ZIP içine girme")
-    scan.add_argument("--no-entropy", action="store_true", help="Entropi taramasını kapat")
-    scan.add_argument("--no-yara", action="store_true", help="YARA kurallarını kapat")
-    scan.add_argument("--no-snippet", action="store_true", help="Bağlam alıntısı yazma")
+    scan.add_argument("--max-size", type=int, help="Maximum file size (bytes)")
+    scan.add_argument("--ocr", action="store_true", help="Run OCR over images")
+    scan.add_argument("--no-archives", action="store_true", help="Do not descend into ZIPs")
+    scan.add_argument("--no-entropy", action="store_true", help="Disable entropy scanning")
+    scan.add_argument("--no-yara", action="store_true", help="Disable YARA rules")
+    scan.add_argument("--no-snippet", action="store_true", help="Omit context snippets")
     scan.add_argument(
-        "--quarantine", action="store_true", help="Riskli dosyaları şifreleyip izole et"
+        "--quarantine", action="store_true", help="Encrypt and isolate risky files"
     )
-    scan.add_argument("--shred", action="store_true", help="Orijinali üzerine yazarak sil")
+    scan.add_argument("--shred", action="store_true", help="Overwrite the original before deleting")
     scan.add_argument(
         "--incremental",
         action="store_true",
-        help="Değişmemiş dosyaları önbellekten geç (karantina ile birlikte kullanılamaz)",
+        help="Skip unchanged files via the cache (not usable with quarantine)",
     )
-    scan.add_argument("--cache-path", help="Artımlı tarama önbelleği dosyası")
+    scan.add_argument("--cache-path", help="Incremental scan cache file")
     scan.add_argument(
-        "--clear-cache", action="store_true", help="Önbelleği sil ve tam tarama yap"
+        "--clear-cache", action="store_true", help="Delete the cache and run a full scan"
     )
-    scan.add_argument("--baseline", help="Baz çizgisi dosyası (bulguları bastır)")
+    scan.add_argument("--baseline", help="Baseline file (suppress known findings)")
     scan.add_argument(
-        "--write-baseline", help="Mevcut bulguları baz çizgisi olarak kaydet"
+        "--write-baseline", help="Save the current findings as a baseline"
     )
-    scan.add_argument("--webhook", help="Bildirim webhook adresi")
-    scan.add_argument("--audit-log", help="JSONL denetim izi dosyası")
-    scan.add_argument("--quiet", "-q", action="store_true", help="Sadece özet yaz")
-    scan.add_argument("--verbose", "-v", action="store_true", help="Her bulguyu yaz")
+    scan.add_argument("--webhook", help="Notification webhook URL")
+    scan.add_argument("--audit-log", help="JSONL audit trail file")
+    scan.add_argument("--quiet", "-q", action="store_true", help="Print only the summary")
+    scan.add_argument("--verbose", "-v", action="store_true", help="Print every finding")
     scan.add_argument("--no-html", action="store_true", help=argparse.SUPPRESS)
 
     # -- watch ------------------------------------------------------------
-    watch = subparsers.add_parser("watch", help="Dizini gerçek zamanlı izle")
-    watch.add_argument("target", nargs="?", default=".", help="İzlenecek dizin")
-    watch.add_argument("--config", "-c", help="Yapılandırma dosyası")
-    watch.add_argument("--ocr", action="store_true", help="Görsellerde OCR")
-    watch.add_argument("--quarantine", action="store_true", help="Bulguda izole et")
-    watch.add_argument("--min-severity", help="Alt eşik")
+    watch = subparsers.add_parser("watch", help="Watch a directory in real time")
+    watch.add_argument("target", nargs="?", default=".", help="Directory to watch")
+    watch.add_argument("--config", "-c", help="Configuration file")
+    watch.add_argument("--ocr", action="store_true", help="Run OCR over images")
+    watch.add_argument("--quarantine", action="store_true", help="Isolate on a finding")
+    watch.add_argument("--min-severity", help="Lower threshold")
 
     # -- vault ------------------------------------------------------------
-    vault = subparsers.add_parser("vault", help="Karantina kasasını yönet")
+    vault = subparsers.add_parser("vault", help="Manage the quarantine vault")
     vault.add_argument(
         "action",
         choices=("list", "restore", "verify", "purge", "migrate"),
-        help="Yapılacak işlem",
+        help="Action to perform",
     )
-    vault.add_argument("name", nargs="?", help="Kasa dosyası adı (restore/purge için)")
-    vault.add_argument("--dir", default="KARANTINA_BOLGESI", help="Kasa dizini")
-    vault.add_argument("--to", help="Geri yüklenecek hedef yol")
-    vault.add_argument("--force", action="store_true", help="Hedefin üzerine yaz")
-    vault.add_argument("--all", action="store_true", help="Tüm kasayı boşalt (purge)")
-    vault.add_argument("--shred", action="store_true", help="Üzerine yazarak sil")
+    vault.add_argument("name", nargs="?", help="Vault file name (for restore/purge)")
+    vault.add_argument("--dir", default="KARANTINA_BOLGESI", help="Vault directory")
+    vault.add_argument("--to", help="Destination path to restore to")
+    vault.add_argument("--force", action="store_true", help="Overwrite the destination")
+    vault.add_argument("--all", action="store_true", help="Empty the whole vault (purge)")
+    vault.add_argument("--shred", action="store_true", help="Overwrite before deleting")
 
     # -- rules ------------------------------------------------------------
-    rules = subparsers.add_parser("rules", help="Tespit kurallarını listele")
-    rules.add_argument("--tag", help="Sadece bu etiketi taşıyan kurallar")
-    rules.add_argument("--json", action="store_true", help="JSON olarak yaz")
+    rules = subparsers.add_parser("rules", help="List the detection rules")
+    rules.add_argument("--tag", help="Only rules carrying this tag")
+    rules.add_argument("--json", action="store_true", help="Print as JSON")
 
     # -- precommit --------------------------------------------------------
     precommit = subparsers.add_parser(
-        "precommit", help="Commit edilmek üzere hazırlanmış (staged) dosyaları tara"
+        "precommit", help="Scan the files staged for commit"
     )
-    precommit.add_argument("--config", "-c", help="Yapılandırma dosyası")
+    precommit.add_argument("--config", "-c", help="Configuration file")
     precommit.add_argument(
-        "--fail-on", default="high", help="Bu derece ve üstünde commit'i engelle"
+        "--fail-on", default="high", help="Block the commit at this severity or above"
     )
-    precommit.add_argument("--install", action="store_true", help="Git kancasını kur")
+    precommit.add_argument("--install", action="store_true", help="Install the git hook")
 
     # -- init -------------------------------------------------------------
-    init = subparsers.add_parser("init", help="Örnek sentinel.yml oluştur")
-    init.add_argument("--force", action="store_true", help="Varsa üzerine yaz")
+    init = subparsers.add_parser("init", help="Create an example sentinel.yml")
+    init.add_argument("--force", action="store_true", help="Overwrite an existing file")
 
     # -- doctor -----------------------------------------------------------
-    subparsers.add_parser("doctor", help="Ortam ve bağımlılık kontrolü")
+    subparsers.add_parser("doctor", help="Check the environment and dependencies")
 
     return parser
 
 
 # ---------------------------------------------------------------------------
 def _load_config(args) -> ScanConfig:
-    """Yapılandırmayı katmanlı olarak kurar: dosya → ortam → CLI."""
+    """Build the configuration in layers: file -> environment -> CLI."""
     path = getattr(args, "config", None)
     if path:
         if not os.path.isfile(path):
-            raise FileNotFoundError(f"Yapılandırma dosyası bulunamadı: {path}")
+            raise FileNotFoundError(f"Configuration file not found: {path}")
         config = ScanConfig.from_file(path)
     else:
         config = ScanConfig.discover() or ScanConfig()
@@ -307,7 +308,7 @@ def _formats(args) -> list:
     if getattr(args, "no_report", False):
         return []
     raw = [item.strip().lower() for item in (args.format or "").split(",") if item.strip()]
-    # Eski `--no-html` anahtarı hâlâ çalışsın.
+    # Keep the legacy `--no-html` switch working.
     if getattr(args, "no_html", False):
         raw = [item for item in raw if item != "html"]
     return raw
@@ -321,21 +322,22 @@ def cmd_scan(args, style: _Style) -> int:
 
     if not args.quiet:
         print(style.cyan(_BANNER.format(version=__version__)))
-        print(f"  Hedef      : {os.path.abspath(config.target)}")
-        print(f"  Kurallar   : {len(_rule_defs(config))} desen")
-        print(f"  Alt eşik   : {config.min_severity}")
+        print(f"  Target     : {os.path.abspath(config.target)}")
+        print(f"  Rules      : {len(_rule_defs(config))} patterns")
+        print(f"  Threshold  : {config.min_severity}")
         print(
-            f"  İşçi       : {config.worker_count()} ({config.executor}) · "
-            f"OCR: {'açık' if config.ocr else 'kapalı'} · "
-            f"Arşiv: {'açık' if config.archive_enabled else 'kapalı'}"
+            f"  Workers    : {config.worker_count()} ({config.executor}) · "
+            f"OCR: {'on' if config.ocr else 'off'} · "
+            f"Archives: {'on' if config.archive_enabled else 'off'}"
         )
         if config.incremental and not config.quarantine:
-            print(f"  Artımlı    : açık · önbellek {_cache_path(config)}")
+            print(f"  Incremental: on · cache {_cache_path(config)}")
         if config.quarantine:
             print(
                 style.yellow(
-                    f"  KARANTİNA AKTİF — {config.quarantine_min_severity} ve üstü "
-                    f"bulgulu dosyalar {config.quarantine_dir} içine şifrelenerek taşınacak."
+                    f"  QUARANTINE ACTIVE - files with findings at "
+                    f"{config.quarantine_min_severity} or above will be encrypted "
+                    f"and moved into {config.quarantine_dir}."
                 )
             )
         print()
@@ -347,18 +349,19 @@ def cmd_scan(args, style: _Style) -> int:
         removed = clear_cache(path)
         if not args.quiet:
             print(
-                f"  Önbellek silindi: {path}"
+                f"  Cache deleted: {path}"
                 if removed
-                else f"  Silinecek önbellek yok: {path}"
+                else f"  No cache to delete: {path}"
             )
 
     if config.incremental and config.quarantine:
-        # Sessizce yok saymak yerine söyle: kullanıcı hızlı bir tarama
-        # beklerken tam tarama alacak ve nedenini bilmeli.
+        # Say it rather than ignoring it silently: the user expects a
+        # fast scan, will get a full one, and should know why.
         print(
             style.yellow(
-                "  [UYARI] Karantina açık — artımlı önbellek kullanılmayacak. "
-                "Veri silen bir karar bayat kanıta dayanamaz."
+                "  [WARNING] Quarantine is on - the incremental cache will "
+                "not be used. A decision that deletes data cannot rest on "
+                "stale evidence."
             )
         )
 
@@ -386,11 +389,11 @@ def cmd_scan(args, style: _Style) -> int:
     try:
         result = scanner.scan(progress=progress)
     except FileNotFoundError as exc:
-        print(style.red(f"[HATA] {exc}"), file=sys.stderr)
+        print(style.red(f"[ERROR] {exc}"), file=sys.stderr)
         return EXIT_ERROR
     except KeyboardInterrupt:
         scanner.stop_scan()
-        print("\n" + style.yellow("[İPTAL] Tarama kullanıcı tarafından durduruldu."))
+        print("\n" + style.yellow("[CANCELLED] The scan was stopped by the user."))
         return EXIT_INTERRUPTED
 
     if not args.quiet and not args.verbose and sys.stdout.isatty():
@@ -405,7 +408,7 @@ def cmd_scan(args, style: _Style) -> int:
         from sentinel.allowlist import save_baseline
 
         count = save_baseline(args.write_baseline, result.findings)
-        print(f"\n  Baz çizgisi yazıldı: {args.write_baseline} ({count} parmak izi)")
+        print(f"\n  Baseline written: {args.write_baseline} ({count} fingerprints)")
 
     formats = _formats(args)
     if formats:
@@ -420,7 +423,7 @@ def cmd_scan(args, style: _Style) -> int:
                 print(f"  {style.green('✓')} {fmt:<6} {path}")
 
     if result.errors and not args.quiet:
-        print(style.dim(f"\n  {len(result.errors)} dosya okunamadı (ayrıntı: JSON raporu)"))
+        print(style.dim(f"\n  {len(result.errors)} files could not be read (details: JSON report)"))
 
     if args.fail_on and result.findings:
         threshold = Severity.parse(args.fail_on)
@@ -428,8 +431,8 @@ def cmd_scan(args, style: _Style) -> int:
         if blocking:
             print(
                 style.red(
-                    f"\n  ✗ KAPI KAPALI: {len(blocking)} bulgu "
-                    f"'{threshold.value}' eşiğinde veya üstünde."
+                    f"\n  ✗ GATE CLOSED: {len(blocking)} findings at or above "
+                    f"'{threshold.value}'."
                 )
             )
             return EXIT_FINDINGS
@@ -455,7 +458,7 @@ def _print_summary(result, style: _Style, quiet: bool):
     counts = result.counts_by_severity()
     total = len(result.findings)
     cached = (
-        style.dim(f"  ({result.files_cached} dosya önbellekten)")
+        style.dim(f"  ({result.files_cached} files from cache)")
         if result.files_cached
         else ""
     )
@@ -463,23 +466,23 @@ def _print_summary(result, style: _Style, quiet: bool):
     if total == 0:
         print(
             style.green(
-                f"  ✓ TEMİZ — {result.files_scanned} dosya tarandı, "
-                f"hassas veri bulunamadı. ({result.duration:.2f} sn)"
+                f"  ✓ CLEAN - {result.files_scanned} files scanned, "
+                f"no sensitive data found. ({result.duration:.2f} s)"
             )
             + cached
         )
         return
 
     unique = result.unique_count
-    # "207 bulgu" analiste 207 iş kalemi olduğunu söyler; oysa aynı
-    # anahtarın 40 kopyası tek iptalle kapanır. İkisini birlikte yaz.
-    bulgu = f"{total} bulgu"
+    # "207 findings" tells the analyst there are 207 items of work, yet
+    # 40 copies of one key close with a single revocation. Print both.
+    found = f"{total} findings"
     if unique != total:
-        bulgu += f" / {unique} tekil sır"
+        found += f" / {unique} unique secrets"
     print(
         style.bold(
-            f"  Risk skoru: {result.risk_score}/100  ·  {bulgu}  ·  "
-            f"{result.files_scanned} dosya  ·  {result.duration:.2f} sn"
+            f"  Risk score: {result.risk_score}/100  ·  {found}  ·  "
+            f"{result.files_scanned} files  ·  {result.duration:.2f} s"
         )
         + cached
     )
@@ -487,21 +490,21 @@ def _print_summary(result, style: _Style, quiet: bool):
     for severity in sorted(Severity, key=lambda s: -s.rank):
         count = counts.get(severity.value, 0)
         if count:
-            parts.append(style.severity(severity, f"{severity.label_tr}: {count}"))
+            parts.append(style.severity(severity, f"{severity.label}: {count}"))
     if parts:
         print("  " + "  ·  ".join(parts))
 
     if result.quarantined:
-        print(style.yellow(f"  {len(result.quarantined)} dosya karantinaya alındı."))
+        print(style.yellow(f"  {len(result.quarantined)} files moved to quarantine."))
 
     _print_shared_secrets(result, style)
 
 
 def _print_shared_secrets(result, style: _Style, limit: int = 5):
-    """Birden fazla dosyaya kopyalanmış sırları öne çıkarır.
+    """Surface the secrets copied into more than one file.
 
-    Bir sır 40 dosyada geçiyorsa listeyi 40 satır gezmek yerine tek
-    satırda görmek gerekir: iş, o anahtarı iptal etmektir.
+    When a secret occurs in 40 files, one line beats scrolling 40 rows:
+    the work is revoking that one key.
     """
     shared = result.shared_secrets()
     if not shared:
@@ -509,20 +512,20 @@ def _print_shared_secrets(result, style: _Style, limit: int = 5):
     print()
     print(
         style.bold(
-            f"  Birden fazla dosyaya kopyalanmış {len(shared)} sır "
-            "(her biri tek iptalle kapanır):"
+            f"  {len(shared)} secrets copied into more than one file "
+            "(each closes with a single revocation):"
         )
     )
     for group in shared[:limit]:
         severity = group.severity_enum
         print(
             f"    {style.severity(severity, severity.icon)} "
-            f"{group.type:<22} {group.file_count} dosyada  "
+            f"{group.type:<22} in {group.file_count} files  "
             f"{style.dim(group.content_masked)}"
         )
     remaining = len(shared) - limit
     if remaining > 0:
-        print(style.dim(f"    … ve {remaining} sır daha (tam liste: raporlar)"))
+        print(style.dim(f"    … and {remaining} more secrets (full list: reports)"))
 
 
 def _print_findings(result, style: _Style, limit: int = 40):
@@ -531,13 +534,13 @@ def _print_findings(result, style: _Style, limit: int = 40):
     print()
     for finding in result.findings[:limit]:
         severity = finding.severity_enum
-        tag = style.severity(severity, f"{severity.icon} {severity.label_tr:<7}")
+        tag = style.severity(severity, f"{severity.icon} {severity.label:<8}")
         location = f"{finding.file}:{finding.line}" if finding.line else finding.file
         print(f"  {tag} {finding.type:<22} {location}")
         print(f"            {style.dim(finding.content_masked)}")
     remaining = len(result.findings) - limit
     if remaining > 0:
-        print(style.dim(f"  … ve {remaining} bulgu daha (tam liste: rapor dosyaları)"))
+        print(style.dim(f"  … and {remaining} more findings (full list: report files)"))
 
 
 # ---------------------------------------------------------------------------
@@ -550,8 +553,8 @@ def cmd_watch(args, style: _Style) -> int:
     if not watchdog_available():
         print(
             style.red(
-                "[HATA] Gerçek zamanlı izleme için watchdog gerekli:\n"
-                "       pip install 'sentinel-dlp[monitor]'"
+                "[ERROR] Real-time monitoring requires watchdog:\n"
+                "        pip install 'sentinel-dlp[monitor]'"
             ),
             file=sys.stderr,
         )
@@ -559,13 +562,13 @@ def cmd_watch(args, style: _Style) -> int:
 
     config = _load_config(args)
     if not os.path.isdir(config.target):
-        print(style.red(f"[HATA] Dizin bulunamadı: {config.target}"), file=sys.stderr)
+        print(style.red(f"[ERROR] Directory not found: {config.target}"), file=sys.stderr)
         return EXIT_ERROR
 
     scanner = Scanner(config.target, config=config)
     print(style.cyan(_BANNER.format(version=__version__)))
-    print(f"  İzleniyor: {os.path.abspath(config.target)}")
-    print(style.dim("  Durdurmak için Ctrl-C.\n"))
+    print(f"  Watching: {os.path.abspath(config.target)}")
+    print(style.dim("  Press Ctrl-C to stop.\n"))
 
     monitor = RealTimeMonitor(config.target, scanner, log_callback=lambda m: print(f"  {m}"))
     try:
@@ -573,7 +576,7 @@ def cmd_watch(args, style: _Style) -> int:
             while True:
                 time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\n  İzleme durduruldu.")
+        print("\n  Monitoring stopped.")
         return EXIT_OK
 
 
@@ -586,21 +589,21 @@ def cmd_vault(args, style: _Style) -> int:
     if args.action == "list":
         items = manager.list_items()
         if not items:
-            print(f"  Kasa boş: {manager.q_dir}")
+            print(f"  Vault is empty: {manager.q_dir}")
             return EXIT_OK
-        print(f"  {manager.q_dir} — {len(items)} dosya\n")
+        print(f"  {manager.q_dir} - {len(items)} files\n")
         for item in items:
-            flag = style.yellow(" [eski format]") if item.get("legacy") else ""
+            flag = style.yellow(" [legacy format]") if item.get("legacy") else ""
             print(f"  {style.bold(item['name'])}{flag}")
-            print(f"    orijinal : {item.get('original_path') or '(bilinmiyor)'}")
-            print(f"    tarih    : {item.get('quarantined_at', '-')}")
-            print(f"    boyut    : {item.get('enc_size', 0)} bayt")
+            print(f"    original : {item.get('original_path') or '(unknown)'}")
+            print(f"    date     : {item.get('quarantined_at', '-')}")
+            print(f"    size     : {item.get('enc_size', 0)} bytes")
         return EXIT_OK
 
     if args.action == "verify":
         results = manager.verify_all()
         if not results:
-            print("  Kasa boş.")
+            print("  Vault is empty.")
             return EXIT_OK
         failed = 0
         for entry in results:
@@ -613,11 +616,11 @@ def cmd_vault(args, style: _Style) -> int:
 
     if args.action == "restore":
         if not args.name:
-            print(style.red("[HATA] Geri yüklenecek dosya adı gerekli."), file=sys.stderr)
+            print(style.red("[ERROR] A file name to restore is required."), file=sys.stderr)
             return EXIT_ERROR
         ok, message = manager.restore_file(args.name, args.to, force=args.force)
         if ok:
-            print(f"  {style.green('✓')} Geri yüklendi: {message}")
+            print(f"  {style.green('✓')} Restored: {message}")
             return EXIT_OK
         print(style.red(f"  ✗ {message}"), file=sys.stderr)
         return EXIT_ERROR
@@ -625,16 +628,16 @@ def cmd_vault(args, style: _Style) -> int:
     if args.action == "purge":
         if not args.name and not args.all:
             print(
-                style.red("[HATA] Dosya adı verin ya da --all kullanın."), file=sys.stderr
+                style.red("[ERROR] Give a file name or use --all."), file=sys.stderr
             )
             return EXIT_ERROR
         removed = manager.purge(args.name, shred=args.shred)
-        print(f"  {removed} dosya kasadan kalıcı olarak silindi.")
+        print(f"  {removed} files permanently deleted from the vault.")
         return EXIT_OK
 
     if args.action == "migrate":
         moved = migrate_legacy_dirs(args.dir)
-        print(f"  {moved} dosya eski karantina dizinlerinden taşındı.")
+        print(f"  {moved} files moved from legacy quarantine directories.")
         return EXIT_OK
 
     return EXIT_ERROR
@@ -671,22 +674,22 @@ def cmd_rules(args, style: _Style) -> int:
         )
         return EXIT_OK
 
-    print(f"  {len(defs)} tespit kuralı\n")
+    print(f"  {len(defs)} detection rules\n")
     for definition in defs:
         severity = definition.severity
-        marker = style.severity(severity, f"{severity.icon} {severity.label_tr:<7}")
+        marker = style.severity(severity, f"{severity.icon} {severity.label:<7}")
         validator = f" ✓{definition.validator}" if definition.validator else ""
         print(f"  {marker} {style.bold(definition.name)}{style.dim(validator)}")
         print(f"            {definition.title} — {definition.description}")
         if definition.tags:
-            print(f"            {style.dim('etiketler: ' + ', '.join(definition.tags))}")
+            print(f"            {style.dim('tags: ' + ', '.join(definition.tags))}")
     return EXIT_OK
 
 
 # ---------------------------------------------------------------------------
 _HOOK_SCRIPT = """\
 #!/bin/sh
-# Sentinel DLP pre-commit kancası
+# Sentinel DLP pre-commit hook
 exec sentinel precommit --fail-on high
 """
 
@@ -697,16 +700,16 @@ def cmd_precommit(args, style: _Style) -> int:
     if args.install:
         hooks_dir = os.path.join(".git", "hooks")
         if not os.path.isdir(hooks_dir):
-            print(style.red("[HATA] .git/hooks bulunamadı (git deposu değil?)"), file=sys.stderr)
+            print(style.red("[ERROR] .git/hooks not found (not a git repository?)"), file=sys.stderr)
             return EXIT_ERROR
         hook_path = os.path.join(hooks_dir, "pre-commit")
         if os.path.exists(hook_path):
-            print(style.yellow(f"[UYARI] Kanca zaten var: {hook_path}"))
+            print(style.yellow(f"[WARNING] The hook already exists: {hook_path}"))
             return EXIT_ERROR
         with open(hook_path, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(_HOOK_SCRIPT)
         os.chmod(hook_path, 0o755)
-        print(f"  {style.green('✓')} pre-commit kancası kuruldu: {hook_path}")
+        print(f"  {style.green('✓')} pre-commit hook installed: {hook_path}")
         return EXIT_OK
 
     try:
@@ -717,12 +720,12 @@ def cmd_precommit(args, style: _Style) -> int:
             check=True,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        print(style.red(f"[HATA] git çalıştırılamadı: {exc}"), file=sys.stderr)
+        print(style.red(f"[ERROR] Could not run git: {exc}"), file=sys.stderr)
         return EXIT_ERROR
 
     staged = [line for line in completed.stdout.splitlines() if line and os.path.isfile(line)]
     if not staged:
-        print("  Taranacak hazırlanmış dosya yok.")
+        print("  No staged files to scan.")
         return EXIT_OK
 
     from sentinel.engine import Scanner
@@ -737,22 +740,22 @@ def cmd_precommit(args, style: _Style) -> int:
     blocking = [f for f in findings if f.severity_enum >= threshold]
     if not blocking:
         print(
-            f"  {style.green('✓')} {len(staged)} dosya tarandı, "
-            f"'{threshold.value}' eşiğinde bulgu yok."
+            f"  {style.green('✓')} {len(staged)} files scanned, "
+            f"no findings at '{threshold.value}' or above."
         )
         return EXIT_OK
 
-    print(style.red(f"\n  ✗ COMMIT ENGELLENDİ — {len(blocking)} hassas veri bulgusu:\n"))
+    print(style.red(f"\n  ✗ COMMIT BLOCKED - {len(blocking)} sensitive-data findings:\n"))
     for finding in blocking[:20]:
         severity = finding.severity_enum
         print(
-            f"    {style.severity(severity, severity.label_tr)} {finding.type} "
+            f"    {style.severity(severity, severity.label)} {finding.type} "
             f"→ {finding.file}:{finding.line}  {style.dim(finding.content_masked)}"
         )
     print(
         style.dim(
-            "\n  Yanlış pozitifse ilgili satıra `sentinel:ignore` yorumu ekleyin\n"
-            "  ya da sentinel.yml içindeki allowlist'e yazın."
+            "\n  If this is a false positive, add a `sentinel:ignore` comment on\n"
+            "  that line, or list it in the allowlist in sentinel.yml."
         )
     )
     return EXIT_FINDINGS
@@ -762,11 +765,11 @@ def cmd_precommit(args, style: _Style) -> int:
 def cmd_init(args, style: _Style) -> int:
     path = DEFAULT_CONFIG_NAMES[0]
     if os.path.exists(path) and not args.force:
-        print(style.yellow(f"[UYARI] {path} zaten var (--force ile üzerine yazın)."))
+        print(style.yellow(f"[WARNING] {path} already exists (use --force to overwrite)."))
         return EXIT_ERROR
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(CONFIG_TEMPLATE)
-    print(f"  {style.green('✓')} {path} oluşturuldu.")
+    print(f"  {style.green('✓')} {path} created.")
     return EXIT_OK
 
 
@@ -784,47 +787,47 @@ def cmd_doctor(args, style: _Style) -> int:
     print(f"  Python {sys.version.split()[0]} · {sys.platform}\n")
 
     modules = {
-        "Metin / kod taraması": ("stdlib", True),
+        "Text / code scanning": ("stdlib", True),
         "PDF (pypdf)": ("pypdf", _importable("pypdf")),
         "Word (python-docx)": ("docx", _importable("docx")),
         "Excel (openpyxl)": ("openpyxl", _importable("openpyxl")),
         "PowerPoint (python-pptx)": ("pptx", _importable("pptx")),
-        "HTML raporu (jinja2)": ("jinja2", _importable("jinja2")),
-        "PDF raporu (reportlab)": ("reportlab", _importable("reportlab")),
-        "Şifreli karantina (cryptography)": (
+        "HTML report (jinja2)": ("jinja2", _importable("jinja2")),
+        "PDF report (reportlab)": ("reportlab", _importable("reportlab")),
+        "Encrypted quarantine (cryptography)": (
             "cryptography",
             QuarantineManager.crypto_available(),
         ),
         "Webhook (requests)": ("requests", _importable("requests")),
-        "YAML yapılandırma (pyyaml)": ("yaml", _importable("yaml")),
+        "YAML configuration (pyyaml)": ("yaml", _importable("yaml")),
     }
     for label, (module, ok) in modules.items():
-        check(label, ok, "kurulu" if ok else f"eksik: pip install {module}")
+        check(label, ok, "installed" if ok else f"missing: pip install {module}")
 
     check(
-        "Gerçek zamanlı izleme (watchdog)",
+        "Real-time monitoring (watchdog)",
         watchdog_available(),
-        "kurulu" if watchdog_available() else "eksik: pip install watchdog",
+        "installed" if watchdog_available() else "missing: pip install watchdog",
     )
     check(
-        "YARA kuralları (yara-python)",
+        "YARA rules (yara-python)",
         yara_available(),
-        "kurulu" if yara_available() else "eksik: pip install yara-python",
+        "installed" if yara_available() else "missing: pip install yara-python",
     )
 
     tesseract = image.find_tesseract()
     check(
-        "OCR motoru (Tesseract)",
+        "OCR engine (Tesseract)",
         bool(tesseract) and _importable("pytesseract"),
-        tesseract or "bulunamadı — görsel taraması devre dışı",
+        tesseract or "not found - image scanning disabled",
     )
 
     print()
     config = ScanConfig.discover()
     if config:
-        print(f"  Yapılandırma bulundu, hedef: {config.target}")
+        print(f"  Configuration found, target: {config.target}")
     else:
-        print(style.dim("  Yapılandırma dosyası yok — `sentinel init` ile oluşturabilirsiniz."))
+        print(style.dim("  No configuration file - create one with `sentinel init`."))
     return EXIT_OK
 
 
@@ -850,8 +853,8 @@ _COMMANDS = {
 
 
 def main(argv=None) -> int:
-    # Herhangi bir şey yazılmadan ÖNCE: Windows'ta yönlendirilmiş çıktı
-    # aksi hâlde ilk Türkçe karakterde çöker.
+    # BEFORE anything is written: on Windows, redirected output
+    # otherwise crashes on the first non-ASCII character.
     _ensure_utf8_output()
 
     parser = build_parser()
@@ -866,10 +869,10 @@ def main(argv=None) -> int:
     try:
         return handler(args, style)
     except KeyboardInterrupt:
-        print("\n  İptal edildi.")
+        print("\n  Cancelled.")
         return EXIT_INTERRUPTED
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
-        print(style.red(f"[HATA] {exc}"), file=sys.stderr)
+        print(style.red(f"[ERROR] {exc}"), file=sys.stderr)
         return EXIT_ERROR
 
 

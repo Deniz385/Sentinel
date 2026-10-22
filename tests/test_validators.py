@@ -1,8 +1,8 @@
-"""Algoritmik doğrulayıcı testleri.
+"""Tests for the algorithmic validators.
 
-Bu katman aracın yanlış pozitif oranını belirler; bu yüzden hem "geçerli
-olanı kabul et" hem "regex'e uyan ama geçersiz olanı reddet" tarafı
-ayrı ayrı sınanır.
+This layer decides the tool's false-positive rate, so both sides are
+tested separately: "accept what is valid" and "reject what matches
+the regex but is invalid".
 """
 
 from __future__ import annotations
@@ -46,12 +46,12 @@ class TestTckn:
     @pytest.mark.parametrize(
         "value",
         [
-            "0123456789 0".replace(" ", ""),  # 0 ile başlar
+            "0123456789 0".replace(" ", ""),  # starts with 0
             "1234567890",  # 10 hane
             "123456789012",  # 12 hane
-            "1000000014a",  # harf içerir
+            "1000000014a",  # contains a letter
             "",
-            "11111111110",  # algoritmayı geçer ama tüm haneler aynı
+            "11111111110",  # passes the algorithm but every digit is the same
         ],
     )
     def test_rejects(self, value):
@@ -74,8 +74,8 @@ class TestCreditCard:
         assert not validate_credit_card(INVALID_CARD)
 
     def test_rejects_unknown_brand_even_if_luhn_passes(self):
-        # Luhn'u geçen ama bilinen bir kart ön eki olmayan 16 hane:
-        # sadece Luhn'a güvenmek yanlış pozitif üretir.
+        # Sixteen digits that pass Luhn but carry no known card prefix:
+        # relying on Luhn alone produces false positives.
         candidate = "9999999999999995"
         assert luhn_check(candidate)
         assert not validate_credit_card(candidate)
@@ -108,7 +108,7 @@ class TestIban:
         assert not validate_iban(INVALID_IBAN)
 
     def test_rejects_wrong_country_length(self):
-        # TR IBAN 26 hane olmalı; 25 hane mod-97'yi geçse bile reddedilir.
+        # A Turkish IBAN must be 26 characters; 25 is rejected even if mod-97 passes.
         assert not validate_iban("TR3300061005197864578413")
 
 
@@ -127,7 +127,7 @@ class TestJwt:
         [
             "eyJhbGciOiJIUzI1NiJ9.only-two-parts",
             "not.a.jwt",
-            "eyJub3RhbGciOiJ4In0.eyJhIjoxfQ.sig",  # başlıkta alg yok
+            "eyJub3RhbGciOiJ4In0.eyJhIjoxfQ.sig",  # no alg in the header
             "",
         ],
     )
@@ -149,7 +149,7 @@ class TestBase58Check:
 
 class TestEmail:
     @pytest.mark.parametrize(
-        "value", ["deniz.celik@adu.edu.tr", "test_user123@gmail.com", "a+b@sub.co.uk"]
+        "value", ["jane.doe@university.edu", "test_user123@gmail.com", "a+b@sub.co.uk"]
     )
     def test_valid(self, value):
         assert validate_email(value)
@@ -161,7 +161,7 @@ class TestEmail:
             "deniz@.com",
             "@gmail.com",
             "iki@at@var.com",
-            "user@example.com",  # RFC 2606: ayrılmış, gerçek adres değil
+            "user@example.com",  # RFC 2606: reserved, not a real address
             "admin@localhost",
         ],
     )

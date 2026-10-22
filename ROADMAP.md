@@ -1,222 +1,236 @@
-# Sentinel — Yol Haritası
+# Sentinel - Roadmap
 
-Sentinel'in hedefi **kurumsal seviyede, çapraz platform çalışan bir DLP
-(Data Loss Prevention) / hassas veri keşif platformu** olmak. Bu doküman
-mevcut durumdaki eksikleri, bunların neden kritik olduğunu ve hangi fazda
-kapatıldığını kayıt altına alır.
-
----
-
-## 1. Teşhis — v3.0'daki (önceki) kusurlar
-
-### 1.1 Doğruluk / güvenlik hataları
-
-| # | Bulgu | Etki |
-|---|-------|------|
-| A1 | `reporter.py` tüm alanları f-string ile HTML'e basıyordu | **HTML/JS injection**: `<script>` içeren bir dosya adı raporu silahlandırır |
-| A2 | `quarantine.py` "şifreleme" = `base64(reverse(bytes))` | Şifreleme **değil**, sadece gizleme. Karantinaya alınan KVKK verisi fiilen açıkta |
-| A3 | Karantina orijinali **doğrulamadan önce** siliyordu | Şifreli kopya bozuksa veri **kalıcı kaybı** |
-| A4 | `quarantine.restore_file` içinde `subprocess` import edilmemiş | `NameError`, çıplak `except` ile yutuluyor |
-| A5 | `WEBHOOK_URL` kaynak kodda sabit | Sır sızdırma riski; ayarı değiştirmek için kod değiştirmek gerekiyor |
-| A6 | `TR_IBAN` regex'i yakalayan grup içeriyordu (`(\d{4}\s?){6}`) | `findall` tüm eşleşme yerine son grubu döndürüyor → IBAN bulguları bozuk |
-| A7 | `pdf_gen.py` içeriği kaçışsız `Paragraph`'a veriyordu | `<` / `&` içeren veri PDF üretimini patlatıyor |
-| A8 | Karantina dizini `KARANTINA_BOLGESI`, repodaki dizin `QUARANTINE_ZONE` | Kurtarma aracı yanlış yere bakıyor |
-
-### 1.2 Yanlış vaatler (kod söylediğini yapmıyordu)
-
-| # | Bulgu |
-|---|-------|
-| B1 | `start_scan_parallel()` **paralel değil** — düz `os.walk` döngüsü |
-| B2 | `main.py` "ZIP" modülünü ilan ediyor, `scanner.py`'de ZIP desteği **yok** (eski `scan_results.csv` ZIP bulgusu içeriyor → regresyon) |
-| B3 | `.docx` düz metin olarak okunuyordu → ZIP binary çöpü |
-| B4 | `rules/sample.yar` hiçbir yerde kullanılmıyor (ölü dosya) |
-| B5 | `monitor.py`, `Scanner` üzerinde var olmayan `scan_file_wrapper()` çağırıyor → gerçek zamanlı izleme **tamamen çalışmıyor** |
-| B6 | `utils.setup_logger` ve `calculate_entropy` hiç çağrılmıyor (ölü kod); tarayıcı `print()` kullanıyor |
-
-### 1.3 Performans
-
-| # | Bulgu |
-|---|-------|
-| C1 | `calculate_file_hash()` **her bulgu için** yeniden çağrılıyordu → 50 MB'lık dosyada 1000 bulgu = 50 GB okuma |
-| C2 | Dosyanın tamamı RAM'e okunuyordu (`f.read()`) |
-| C3 | `calculate_entropy` 256 kez `str.count` çağırıyor → O(256·n) |
-| C4 | `openpyxl.load_workbook` `read_only` olmadan açılıyordu |
-
-### 1.4 Taşınabilirlik
-
-Araç fiilen Windows'a kilitliydi: `C:\Program Files\Tesseract-OCR` sabit yolu,
-`os.popen('date /t')`, `os.startfile`, `explorer /select`, `os.system("start ...")`.
-
-### 1.5 Mühendislik disiplini
-
-| # | Bulgu |
-|---|-------|
-| E1 | `tests/test_patterns.py` **çalışmıyor**: `TR_ID`, `CREDIT_CARD`, `PHONE` isimli desen yok (gerçek isimler `TC_KIMLIK`, `KREDI_KARTI`, `TELEFON`) → `KeyError` |
-| E2 | `requirements.txt` **UTF-16** kodlanmış → `pip install -r` çoğu ortamda patlıyor; `pytesseract`, `pillow`, `customtkinter`, `matplotlib`, `reportlab`, `watchdog`, `requests`, `pyyaml` listede yok |
-| E3 | 52 MB'lık `big_test_data.txt` repoya commit edilmiş; `dashboard.html`, `scan_results.csv`, `scan_report.csv` çıktıları da versiyonlanmış |
-| E4 | `README.md` ve `LICENSE` **boş** |
-| E5 | CI yok, paketleme (`pyproject.toml`) yok, `sentinel` komutu yok |
-| E6 | Yapılandırma dosyası yok; `python-dotenv` bağımlılıkta ama kullanılmıyor |
-
-### 1.6 Ürün olarak eksikler
-
-Önem sırasına göre: önem derecesi (severity) yok → her bulgu eşit; yanlış
-pozitif yönetimi yok (allowlist/baseline/satır-içi bastırma yok); makine
-okunur çıktı yok (CI entegrasyonu imkânsız); entropi tabanlı generic sır
-avı yok; arşiv/Office/PPTX desteği yok; `git` pre-commit modu yok;
-denetim izi (audit log) yok.
+Sentinel's goal is to be an **enterprise-grade, cross-platform DLP (data
+loss prevention) and sensitive-data discovery platform**. This document
+records the gaps in the current state, why each one mattered, and in
+which phase it was closed.
 
 ---
 
-## 2. Yol haritası
+## 1. Diagnosis - the defects in v3.0 (the previous version)
 
-### Faz 0 — Repo hijyeni ✅
-`requirements.txt` UTF-8'e çevrildi ve tamamlandı · `pyproject.toml` +
-`sentinel` konsol komutu · üretilen çıktılar repodan çıkarıldı ve
-`.gitignore`'a alındı · gerçek `README.md` · MIT `LICENSE` · GitHub Actions
-CI (Linux + Windows, Python 3.10–3.13).
+### 1.1 Correctness and security faults
 
-### Faz 1 — Çekirdek motorun yeniden inşası ✅
-`src/` düz modül yığını yerine gerçek bir `sentinel/` paketi:
+| # | Finding | Impact |
+|---|---------|--------|
+| A1 | `reporter.py` wrote every field into HTML with f-strings | **HTML/JS injection**: a filename containing `<script>` weaponises the report |
+| A2 | `quarantine.py` "encryption" was `base64(reverse(bytes))` | **Not** encryption, only obfuscation. Quarantined personal data was effectively in the clear |
+| A3 | Quarantine deleted the original **before verifying** | **Permanent data loss** if the encrypted copy was corrupt |
+| A4 | `subprocess` was not imported in `quarantine.restore_file` | `NameError`, swallowed by a bare `except` |
+| A5 | `WEBHOOK_URL` hard-coded in the source | Secret-leak risk; changing a setting required changing code |
+| A6 | The `TR_IBAN` regex had a capturing group (`(\d{4}\s?){6}`) | `findall` returned the last group instead of the whole match, so IBAN findings were broken |
+| A7 | `pdf_gen.py` passed content to `Paragraph` unescaped | Data containing `<` or `&` blew up PDF generation |
+| A8 | Quarantine directory was `KARANTINA_BOLGESI` while the repo held `QUARANTINE_ZONE` | The recovery tool looked in the wrong place |
+
+### 1.2 False promises (the code did not do what it said)
+
+| # | Finding |
+|---|---------|
+| B1 | `start_scan_parallel()` was **not parallel** - a plain `os.walk` loop |
+| B2 | `main.py` advertised a "ZIP" module while `scanner.py` had **no** ZIP support (the old `scan_results.csv` contained a ZIP finding, so this was a regression) |
+| B3 | `.docx` was read as plain text, i.e. ZIP binary noise |
+| B4 | `rules/sample.yar` was used nowhere (a dead file) |
+| B5 | `monitor.py` called `scan_file_wrapper()`, which did not exist on `Scanner`, so real-time monitoring **never worked at all** |
+| B6 | `utils.setup_logger` and `calculate_entropy` were never called (dead code); the scanner used `print()` |
+
+### 1.3 Performance
+
+| # | Finding |
+|---|---------|
+| C1 | `calculate_file_hash()` ran again **for every finding** - 1000 findings in a 50 MB file meant 50 GB of reads |
+| C2 | Whole files were read into RAM (`f.read()`) |
+| C3 | `calculate_entropy` called `str.count` 256 times - O(256*n) |
+| C4 | `openpyxl.load_workbook` was opened without `read_only` |
+
+### 1.4 Portability
+
+The tool was effectively locked to Windows: a hard-coded
+`C:\Program Files\Tesseract-OCR` path, `os.popen('date /t')`,
+`os.startfile`, `explorer /select`, `os.system("start ...")`.
+
+### 1.5 Engineering discipline
+
+| # | Finding |
+|---|---------|
+| E1 | `tests/test_patterns.py` **did not run**: there were no patterns named `TR_ID`, `CREDIT_CARD` or `PHONE` (the real names were `TC_KIMLIK`, `KREDI_KARTI`, `TELEFON`), so it raised `KeyError` |
+| E2 | `requirements.txt` was **UTF-16** encoded, so `pip install -r` failed in most environments; `pytesseract`, `pillow`, `customtkinter`, `matplotlib`, `reportlab`, `watchdog`, `requests` and `pyyaml` were missing from it |
+| E3 | A 52 MB `big_test_data.txt` was committed, along with generated `dashboard.html`, `scan_results.csv` and `scan_report.csv` output |
+| E4 | `README.md` and `LICENSE` were **empty** |
+| E5 | No CI, no packaging (`pyproject.toml`), no `sentinel` command |
+| E6 | No configuration file; `python-dotenv` was a dependency but unused |
+
+### 1.6 Gaps as a product
+
+In order of importance: no severity, so every finding weighed the same;
+no false-positive management (no allowlist, baseline or inline
+suppression); no machine-readable output, making CI integration
+impossible; no entropy-based hunting for generic secrets; no archive,
+Office or PPTX support; no `git` pre-commit mode; no audit trail.
+
+---
+
+## 2. Roadmap
+
+### Phase 0 - Repository hygiene ✅
+`requirements.txt` converted to UTF-8 and completed · `pyproject.toml`
+plus the `sentinel` console command · generated output removed from the
+repository and added to `.gitignore` · a real `README.md` · an MIT
+`LICENSE` · GitHub Actions CI (Linux and Windows, Python 3.10-3.13).
+
+### Phase 1 - Rebuilding the core engine ✅
+A real `sentinel/` package in place of the flat `src/` module pile:
 
 ```
 sentinel/
-  config.py        ScanConfig: YAML + .env + CLI katmanlı yapılandırma
-  severity.py      5 kademeli önem derecesi + risk skoru
-  patterns.py      Önem derecesi ve doğrulayıcı bağlı desen kataloğu (40+)
-  validators.py    TCKN · Luhn (+kart markası) · IBAN mod-97 · JWT · Base58Check
-  entropy.py       O(n) Shannon entropisi + normalize entropi
-  redaction.py     Maskeleme + HMAC parmak izi (korelasyon, sızdırmadan)
-  allowlist.py     Glob/değer/parmak izi + satır-içi `sentinel:ignore`
-  matcher.py       Metin → bulgu (doğrula, bastır, tekilleştir, skorla)
-  extractors/      plain · pdf · docx · xlsx · pptx · zip · görsel (OCR)
-  engine.py        Gerçek paralel tarama, akışlı okuma, iptal, ilerleme
-  quarantine.py    AES-256-GCM kasa, doğrulanmış sil, eski formatı okur
-  notify.py        Webhook (Discord/Slack/generic), toplu + maskeli
-  monitor.py       Çalışan gerçek zamanlı izleme (debounce'lu)
+  config.py        ScanConfig: layered YAML + .env + CLI configuration
+  severity.py      five severity levels plus a risk score
+  patterns.py      pattern catalogue with severity and validator bindings
+  validators.py    national ID · Luhn (+ card brand) · IBAN mod-97 · JWT · Base58Check
+  entropy.py       O(n) Shannon entropy and normalized entropy
+  redaction.py     masking plus HMAC fingerprints (correlation without leaking)
+  allowlist.py     glob/value/fingerprint plus inline `sentinel:ignore`
+  matcher.py       text -> findings (validate, suppress, dedupe, score)
+  extractors/      plain · pdf · docx · xlsx · pptx · zip · images (OCR)
+  engine.py        real parallel scanning, streaming reads, cancellation, progress
+  quarantine.py    AES-256-GCM vault, verified deletion, reads the legacy format
+  notify.py        webhooks (Discord/Slack/generic), batched and masked
+  monitor.py       real-time monitoring that works (with debouncing)
   reporting/       html · json · csv · sarif · markdown · pdf
   cli.py           scan · watch · vault · rules · precommit · init
 ```
 
-Kapatılan maddeler: A1–A8, B1–B6, C1–C4, 1.4, E6.
+Closed here: A1-A8, B1-B6, C1-C4, 1.4, E6.
 
-### Faz 2 — Test ve CI ✅
-Bozuk test dosyası atıldı; desenler, doğrulayıcılar, entropi, maskeleme,
-allowlist, çıkarıcılar (ZIP/XLSX/DOCX/PDF), motor (uçtan uca, paralel),
-karantina (AES turu + eski format), raporlayıcılar (**HTML kaçışı dâhil**)
-ve CLI için testler. Kapatılan: E1, E5.
+### Phase 2 - Tests and CI ✅
+The broken test file was discarded and replaced with tests for patterns,
+validators, entropy, masking, the allowlist, extractors (ZIP/XLSX/DOCX/
+PDF), the engine (end to end, in parallel), quarantine (an AES round
+trip plus the legacy format), the reporters (**including HTML
+escaping**) and the CLI. Closed: E1, E5.
 
-### Faz 3 — Ürünleştirme ✅
-Önem derecesi + risk skoru · allowlist/baseline · SARIF (GitHub Code
-Scanning) · `sentinel precommit` git kancası · entropi tabanlı generic sır
-avı · YARA motoru (`rules/*.yar` artık gerçekten çalışıyor) · denetim
-izi (JSONL audit log) · `--fail-on` ile CI kapısı.
+### Phase 3 - Making it a product ✅
+Severity and risk score · allowlist and baseline · SARIF (GitHub Code
+Scanning) · the `sentinel precommit` git hook · entropy-based hunting
+for generic secrets · the YARA engine (`rules/*.yar` finally runs) · a
+JSONL audit trail · a CI gate via `--fail-on`.
 
-### Faz 4 — Ölçümden çıkan geliştirmeler ✅
+### Phase 4 - Improvements that came out of measurement ✅
 
-v4.0 yeşile döndükten sonra "daha ne yapılabilir?" sorusunu tahminle
-değil **ölçümle** yanıtladım. Üç ölçüm, bu fazın gerekçesidir:
+Once v4.0 was green, the question "what else is worth doing?" was
+answered by **measurement** rather than guesswork. Three measurements
+justify this phase:
 
-| Ölçüm | Sonuç |
+| Measurement | Result |
 |---|---|
-| Modül başına test kapsamı | `notify.py` **%0** (gece 3'te birini uyandıracak webhook hiç çalıştırılmamış), `monitor.py` %27, `extractors/image.py` %36, `extractors/pdf.py` %54; toplam %81 |
-| Çapraz dosya tekrarı | Aynı 2 sırrı taşıyan 5 dosya → **10 bulgu, 2 tekil sır** |
-| Profil (40.000 satır) | **1.000.000 `re.search` çağrısı** (satır başına ~25 desen); `_candidates` 1,0 sn + `re.search` 0,93 sn / toplam 3,4 sn |
+| Test coverage per module | `notify.py` **0%** (the webhook that would wake someone at 3am had never been executed), `monitor.py` 27%, `extractors/image.py` 36%, `extractors/pdf.py` 54%; 81% overall |
+| Cross-file duplication | 5 files carrying the same 2 secrets → **10 findings, 2 unique secrets** |
+| Profile (40,000 lines) | **1,000,000 `re.search` calls** (~25 patterns per line); `_candidates` 1.0 s plus `re.search` 0.93 s out of 3.4 s total |
 
-#### 4.1 Çapraz dosya korelasyonu ✅
+#### 4.1 Cross-file correlation ✅
 
-**Sorun.** "207 bulgu" analiste 207 iş kalemi olduğunu söyler. Oysa aynı
-AWS anahtarının 40 kopyası **tek bir iptalle** kapanır. Bulgu sayısı iş
-yükünü değil kopyalama alışkanlığını ölçüyordu.
+**The problem.** "207 findings" tells an analyst there are 207 items of
+work. Yet 40 copies of the same AWS key close with **one revocation**.
+The finding count measured copying habits, not workload.
 
-**Çözüm.** `sentinel/correlation.py`: bulgular `(kural, parmak izi)`
-üzerinden tekil sırlara indirgenir. Parmak izi HMAC-SHA256 olduğu için
-**değer hiçbir yerde açılmadan** kopyalar eşleştirilebilir. Raporların
-hepsi (CLI özeti, HTML panosu, Markdown, JSON, PDF) artık iki sayıyı
-birlikte verir: *bulgu* ve *tekil sır*. Birden fazla dosyaya yayılmış
-sırlar ayrı bir bölümde, en yaygın önce.
+**The fix.** `sentinel/correlation.py` reduces findings to unique
+secrets keyed on `(rule, fingerprint)`. Because the fingerprint is an
+HMAC-SHA256, copies can be matched **without the value ever being
+revealed**. Every report (the CLI summary, the HTML dashboard, Markdown,
+JSON, PDF) now gives both numbers: *findings* and *unique secrets*.
+Secrets spread across more than one file get their own section, most
+widespread first.
 
-Kenar durumları test altında: YARA bulguları (tek değere değil dosyanın
-tamamına uyarlar) **asla** birleştirilmez; bir değer farklı dosyalarda
-farklı derece aldıysa grup en kötü durumu gösterir; konum listesi
-kırpılır ama dosya sayısı tam kalır. Ayrı bir test, grup çıktısının açık
-hassas değer taşımadığını doğrular.
+Edge cases are under test: YARA findings (which match a whole file, not
+one value) are **never** merged; where a value was rated differently in
+different files the group shows the worst case; the location list is
+truncated while the file count stays exact. A separate test verifies
+that group output carries no cleartext sensitive value.
 
-#### 4.2 Artımlı tarama ✅
+#### 4.2 Incremental scanning ✅
 
-**Sorun.** 500 GB'lık bir paylaşımı her gece baştan taramak, o
-paylaşımın %99'u değişmemişken, harcanan sürenin neredeyse tamamının
-israf olması demek.
+**The problem.** Re-scanning a 500 GB share from scratch every night,
+when 99% of it has not changed, wastes nearly all of that time.
 
-**Çözüm.** `sentinel/cache.py`: `(yol → mtime_ns, boyut, bulgular)`
-kaydı. `sentinel scan --incremental`.
+**The fix.** `sentinel/cache.py` keeps a `(path -> mtime_ns, size,
+findings)` record. `sentinel scan --incremental`.
 
-| 400 dosya · 4,3 MB | Süre |
+| 400 files · 4.3 MB | Duration |
 |---|---|
-| Tam tarama | 0,87 sn |
-| Tamamı önbellekten | **0,03 sn** (≈29×) |
-| 1 dosya değişmiş | 0,04 sn (399 önbellekten) |
+| Full scan | 0.87 s |
+| Entirely from cache | **0.03 s** (~29x) |
+| One file changed | 0.04 s (399 from cache) |
 
-Bir güvenlik aracında önbellek, yanlış kurgulandığında **sızıntıyı
-görünmez yapan** bir mekanizmadır. Bu yüzden dört kural koda ve testlere
-gömülü:
+In a security tool a cache is, if built carelessly, the mechanism that
+makes a leak **invisible**. So four rules are embedded in the code and
+in the tests:
 
-1. **Kural kataloğu, yapılandırma ya da sürüm değişirse önbellek tamamen
-   düşer.** Tek bir bayat kayıt, yeni bir kuralın bulacağı sırrı gizler.
-2. **Geçici hatalar önbelleğe alınmaz.** Kilitli bir dosya sonsuza kadar
-   görünmez olmamalı.
-3. **Karantina açıkken önbellek hiç kullanılmaz.** Veri *silen* bir
-   karar bayat kanıta dayanamaz; CLI bunu sessizce yapmaz, uyarır.
-4. **Varsayılan kapalı.** Araç, sorulmadan "bu dosya değişmemiş"
-   varsayımına dayanmaz.
+1. **If the rule catalogue, the configuration or the version changes,
+   the cache is dropped entirely.** A single stale entry hides the
+   secret a new rule would have found.
+2. **Transient errors are not cached.** A locked file must not become
+   invisible forever.
+3. **The cache is never used while quarantine is on.** A decision that
+   *deletes* data cannot rest on stale evidence; the CLI says so rather
+   than doing it silently.
+4. **Off by default.** The tool does not assume "this file has not
+   changed" unless asked to.
 
-Bilinen ödün, gizlenmek yerine teste çivilenmiştir
-(`test_mtime_rollback_is_a_known_limitation`): tazelik ölçütü
-`(mtime, boyut)` bir *sezgidir*, kanıt değil. mtime'ı geri alıp boyutu
-koruyan bir değişiklik önbelleği atlatır. Adli kesinlik gerektiğinde
-artımlı tarama kapalı kalmalı.
+The known trade-off is pinned in a test rather than hidden
+(`test_mtime_rollback_is_a_known_limitation`): the freshness test
+`(mtime, size)` is a *heuristic*, not proof. A change that restores
+mtime and preserves size slips past the cache. Where forensic certainty
+is required, incremental scanning stays off.
 
-#### 4.3 Hâlâ açık olanlar (öncelik sırasıyla)
+#### 4.3 Still open (in priority order)
 
-1. **Ham hız.** Tek iş parçacığında 2–3 MB/sn, 500 GB'lık bir paylaşımda
-   günler demek. Seçenekler: birleşik tek regex (3–5×), hyperscan
-   (10–100×), çekirdeğin Rust'a taşınması (20–50×). Hangisine
-   girişmeden önce prototipleyip ölçmek gerekir — ön süzgeçte bir
-   "iki kademeli birleşik regex" denemesi ölçümde **hiç kazanç
-   vermediği için geri alınmıştı**; aynı hatayı tekrarlamamak lazım.
-2. **Yapısal veri / kolon farkındalığı.** Luhn'dan geçen sipariş
-   numarası sorununun ilkeli çözümü satır değil **kolon** görmekten
-   geçiyor: CSV başlığı `siparis_no` ise kart kuralı o kolonda
-   çalışmamalı.
-3. **Ölçülen test boşlukları.** `notify.py` %0 kapsam kabul edilemez:
-   webhook, bulgu *olduğunda* susarsa kimse fark etmez.
-4. **Karantina anahtar yönetimi.** Kendi demomda, geçici anahtarla
-   karantinaya aldığım bir dosyayı kalıcı olarak kaybettim — belgelenmiş
-   riskin canlı gösterimi. Çoklu alıcı, anahtar emaneti (escrow) ve
-   rotasyon gerekli.
-5. **Akışlı çıktı.** Tüm bulgular bellekte tutuluyor; milyonlarca
-   bulguda rapor yazımı değil taramanın kendisi düşer.
-6. **Düzeltme (remediation) iş akışı.** Bulmak işin yarısı; sahip atama,
-   durum takibi, yeniden tarama ile kapatma eksik.
-7. **Gözden geçirilecek karar:** entropi taramasının varsayılan açık
-   olması. Kendi kaynağımızda 5 yanlış pozitif üretti (düzeltildi), ama
-   her kaynak ağacında benzer sınıflar var.
+1. **Raw speed.** 2-3 MB/s single-threaded means days on a 500 GB share.
+   The options: one combined regex (3-5x), hyperscan (10-100x), moving
+   the core to Rust (20-50x). Prototype and measure before committing to
+   any of them - a "two-tier combined regex" attempt in the prescreen
+   **was reverted because measurement showed no gain at all**, and that
+   mistake should not be repeated.
+2. **Structural data and column awareness.** The principled fix for
+   order numbers that pass Luhn is seeing **columns** rather than lines:
+   if a CSV header reads `order_no`, the card rule should not run in
+   that column.
+3. **The measured test gaps.** 0% coverage on `notify.py` is not
+   acceptable: if the webhook goes quiet exactly when there *is* a
+   finding, nobody notices.
+4. **Quarantine key management.** During my own demo I permanently lost
+   a file I had quarantined with an ephemeral key - a live demonstration
+   of a documented risk. Multiple recipients, key escrow and rotation
+   are needed.
+5. **Streaming output.** All findings are held in memory; with millions
+   of them it is the scan itself, not report writing, that falls over.
+6. **A remediation workflow.** Finding is half the job; assigning an
+   owner, tracking status and closing via a rescan are missing.
+7. **A decision to revisit:** entropy scanning being on by default. It
+   produced 5 false positives in our own source (since fixed), and
+   similar classes exist in every source tree.
 
-### Faz 5 — Uzun vade (bu çalışmanın kapsamı dışında)
-- E-posta (`.eml`, `.msg`) ve `.pst` çıkarıcıları
-- Veritabanı tarayıcıları (PostgreSQL / MySQL / MSSQL kolon profilleme)
-- S3 / Azure Blob / Google Drive konnektörleri
-- Named-entity tanıma ile isim/adres tespiti (regex'in yetmediği yer)
-- Merkezî yönetim paneli (FastAPI + çoklu ajan raporlaması)
-- Windows/macOS imzalı paketler, MSI/pkg kurulumu
-- OpenTelemetry metrikleri, Prometheus exporter
+### Phase 5 - Longer term (outside the scope of this work)
+- Email (`.eml`, `.msg`) and `.pst` extractors
+- Database scanners (PostgreSQL / MySQL / MSSQL column profiling)
+- S3 / Azure Blob / Google Drive connectors
+- Named-entity recognition for names and addresses (where regex is not enough)
+- A central management panel (FastAPI plus multi-agent reporting)
+- Signed Windows and macOS packages, MSI/pkg installers
+- OpenTelemetry metrics, a Prometheus exporter
 
 ---
 
-## 3. Uyumluluk notu
+## 3. Compatibility note
 
-Eski CSV sütunları (`file`, `line`, `type`, `content_masked`, `sha256`)
-korunur; yeni sütunlar (`severity`, `rule`, `fingerprint`, `source`)
-sonlarına eklenir. `Scanner(target).start_scan_parallel()` ve
-`get_patterns()` eski imzalarıyla çalışmaya devam eder, böylece eski
-betikler kırılmaz.
+The legacy CSV columns (`file`, `line`, `type`, `content_masked`,
+`sha256`) are preserved and the new columns (`severity`, `rule`,
+`fingerprint`, `source`) are appended after them.
+`Scanner(target).start_scan_parallel()` and `get_patterns()` keep their
+old signatures, so existing scripts do not break.
+
+Six rules were renamed from Turkish to English identifiers
+(`TC_KIMLIK` → `TR_NATIONAL_ID`, `KREDI_KARTI` → `CREDIT_CARD`,
+`TELEFON` → `TR_PHONE`, `TR_PLAKA` → `TR_PLATE`, `DOGUM_TARIHI` →
+`DATE_OF_BIRTH`, `SAGLIK_VERISI` → `HEALTH_DATA`). The old names remain
+valid in allowlists, in `--only` and `--skip-rules`, and in inline
+`sentinel:ignore` comments. Baselines, however, must be regenerated: a
+fingerprint is derived from `rule:value`, so renaming a rule changes it.

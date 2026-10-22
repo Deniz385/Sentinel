@@ -1,4 +1,4 @@
-"""Paylaşılan test araçları."""
+"""Shared test helpers."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import sys
 
 import pytest
 
-# Depoyu kurulum yapmadan da test edebilmek için kök dizini yola ekle.
+# Add the repository root to the path so tests run without installing.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from sentinel.config import ScanConfig  # noqa: E402
 from sentinel.severity import Severity  # noqa: E402
 
-#: Algoritmik olarak GEÇERLİ test değerleri. Gerçek kişilere ait değildir;
-#: `tools/generate_data.py` ile aynı yöntemle üretilmiştir.
+#: Algorithmically VALID test values. They belong to no real person;
+#: they are produced the same way as in `tools/generate_data.py`.
 VALID_TCKN = "10000000146"
 VALID_VISA = "4111111111111111"
 VALID_MASTERCARD = "5555555555554444"
@@ -22,7 +22,7 @@ VALID_TR_IBAN = "TR330006100519786457841326"
 VALID_DE_IBAN = "DE89370400440532013000"
 VALID_BTC = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 
-#: Regex'e uyan ama algoritmayı GEÇMEYEN değerler (yanlış pozitif testleri).
+#: Values that match the regex but FAIL the algorithm (false-positive tests).
 INVALID_TCKN = "12345678901"
 INVALID_CARD = "1234567812345678"
 INVALID_IBAN = "TR330006100519786457841327"
@@ -30,10 +30,11 @@ INVALID_IBAN = "TR330006100519786457841327"
 
 @pytest.fixture
 def config():
-    """Testler için belirlenimci (deterministik) yapılandırma.
+    """A deterministic configuration for tests.
 
-    Entropi taraması ve YARA kapalı: bu testler desen davranışını ölçer,
-    eklentilerin varlığına göre sonuç değişmemeli.
+    Entropy scanning and YARA are off: these tests measure pattern
+    behaviour, and results must not depend on which extras happen to be
+    installed.
     """
     return ScanConfig(
         min_severity=Severity.INFO.value,
@@ -46,7 +47,7 @@ def config():
 
 @pytest.fixture
 def tree(tmp_path):
-    """Dosya ağacı kurmak için yardımcı."""
+    """Helper for building a file tree."""
 
     def build(files: dict):
         for name, content in files.items():
@@ -55,10 +56,10 @@ def tree(tmp_path):
             if isinstance(content, bytes):
                 path.write_bytes(content)
             else:
-                # Metin bile olsa bayt olarak yaz: `write_text` Windows'ta
-                # `\n` -> `\r\n` çevirisi yapar ve dosya baytları testin
-                # beklediğinden farklı olur. Hash ve bayt karşılaştırması
-                # yapan testler yalnızca Windows'ta düşer.
+                # Write bytes even for text: on Windows `write_text`
+                # translates `\n` to `\r\n`, so the file bytes differ
+                # from what the test expects. Tests that compare hashes
+                # or bytes would then fail on Windows only.
                 path.write_bytes(content.encode("utf-8"))
         return tmp_path
 

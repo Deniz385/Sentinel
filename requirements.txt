@@ -1,45 +1,45 @@
-# Sentinel çalışma zamanı bağımlılıkları (UTF-8!)
+# Sentinel runtime dependencies (UTF-8!)
 #
-# Not: v3.0'daki requirements.txt UTF-16 kodlanmıştı; `pip install -r`
-# çoğu ortamda "Invalid requirement" hatası veriyordu.
+# Note: the v3.0 requirements.txt was UTF-16 encoded, so `pip install -r`
+# failed with "Invalid requirement" in most environments.
 #
-# Eksiksiz kurulum (tüm eklentiler dâhil):
+# Full install (every extra):
 #     pip install -r requirements.txt
-# Sadece çekirdek (CLI + metin/kod taraması):
+# Core only (CLI plus text and code scanning):
 #     pip install -e .
 
-# --- Çekirdek ---
-PyYAML>=6.0            # sentinel.yml yapılandırması
-Jinja2>=3.1            # HTML raporu (autoescape ile enjeksiyon koruması)
-cryptography>=42.0     # karantina kasası (AES-256-GCM)
-requests>=2.31         # webhook bildirimleri
+# --- Core ---
+PyYAML>=6.0            # sentinel.yml configuration
+Jinja2>=3.1            # HTML report (autoescape prevents injection)
+cryptography>=42.0     # quarantine vault (AES-256-GCM)
+requests>=2.31         # webhook notifications
 
-# --- Belge çıkarıcıları ---
+# --- Document extractors ---
 pypdf>=4.0             # PDF
 python-docx>=1.1       # Word (.docx)
 openpyxl>=3.1          # Excel (.xlsx)
 python-pptx>=0.6.23    # PowerPoint (.pptx)
 
 # --- Raporlama ---
-reportlab>=4.0         # PDF raporu
+reportlab>=4.0         # PDF report
 
-# --- Gerçek zamanlı izleme ---
+# --- Real-time monitoring ---
 watchdog>=4.0          # sentinel watch
 
-# --- OCR (görsel/taranmış belge analizi) ---
-# Tesseract motorunun ayrıca kurulması gerekir:
+# --- OCR (images and scanned documents) ---
+# The Tesseract engine must be installed separately:
 #   Linux : apt install tesseract-ocr tesseract-ocr-tur
 #   macOS : brew install tesseract tesseract-lang
 #   Win   : https://github.com/UB-Mannheim/tesseract/wiki
 pytesseract>=0.3.10
 Pillow>=10.0
 
-# --- Masaüstü arayüzü (isteğe bağlı) ---
+# --- Desktop interface (optional) ---
 customtkinter>=5.2
 matplotlib>=3.8
 
-# --- Geliştirme / test ---
+# --- Development and testing ---
 pytest>=8.0
 
-# YARA kuralları için (isteğe bağlı, derlenmiş eklenti gerektirir):
+# For YARA rules (optional, needs a compiled extension):
 #   pip install yara-python

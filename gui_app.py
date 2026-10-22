@@ -1,17 +1,17 @@
-"""Sentinel masaüstü arayüzü (CustomTkinter).
+"""Sentinel desktop interface (CustomTkinter).
 
-Çekirdek mantık `sentinel` paketindedir; bu dosya yalnızca sunum
-katmanıdır. v3.0'a göre değişenler:
+The core logic lives in the `sentinel` package; this file is only the
+presentation layer. What changed since v3.0:
 
-* tarama **iş parçacığı havuzunda** çalışır (GUI'de `fork` riskinden
-  kaçınmak için `executor="thread"`), ilerleme çubuğu gerçek yüzdeyi
-  gösterir — belirsiz animasyon değil,
-* bulgular önem derecesine göre renklenir ve filtrelenebilir tabloda
-  listelenir; eskiden sadece log akışı vardı,
-* rapor yazımı ve dosya açma **çapraz platform**dur (`os.startfile`
-  yalnızca Windows'ta vardı),
-* matplotlib zorunlu değil: yoksa grafik yerine metin dağılımı gösterilir,
-  uygulama açılmaya devam eder.
+* scanning runs in a **thread pool** (`executor="thread"`, to avoid the
+  risks of `fork` inside a GUI) and the progress bar shows a real
+  percentage rather than an indeterminate animation,
+* findings are coloured by severity and listed in a filterable table;
+  there used to be only a log stream,
+* writing reports and opening files is **cross-platform**
+  (`os.startfile` exists only on Windows),
+* matplotlib is optional: without it a textual distribution replaces
+  the chart and the application still starts.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import sys
 import threading
 import webbrowser
 
-# PyInstaller ile paketlendiğinde kaynaklar _MEIPASS altında olur.
+# When packaged with PyInstaller, resources live under _MEIPASS.
 _BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
@@ -31,11 +31,11 @@ try:
     from tkinter import filedialog, messagebox
 
     import customtkinter as ctk
-except ImportError:  # pragma: no cover - GUI bağımlılıkları eksik
+except ImportError:  # pragma: no cover - GUI dependencies missing
     sys.stderr.write(
-        "Masaüstü arayüzü için customtkinter gerekli:\n"
+        "The desktop interface requires customtkinter:\n"
         "    pip install 'sentinel-dlp[gui]'\n"
-        "Komut satırı sürümü bağımsız çalışır:  sentinel scan <klasör>\n"
+        "The command-line version works on its own:  sentinel scan <folder>\n"
     )
     raise SystemExit(1) from None
 
@@ -60,7 +60,7 @@ except ImportError:
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
 
-#: Önem derecesi renkleri — durum (status) paleti, kategorik seri değil.
+#: Severity colours - a status palette, not a categorical series.
 SEVERITY_COLORS = {
     Severity.CRITICAL: "#d03b3b",
     Severity.HIGH: "#ec835a",
@@ -69,12 +69,12 @@ SEVERITY_COLORS = {
     Severity.INFO: "#8f8e85",
 }
 
-#: Tabloya basılacak en fazla satır — Tk binlerce widget'ta tıkanır.
+#: Maximum rows rendered in the table - Tk stalls on thousands of widgets.
 MAX_ROWS = 300
 
 
 def open_path(path: str):
-    """Dosyayı/dizini işletim sisteminin varsayılan uygulamasında açar."""
+    """Open a file or directory in the operating system's default application."""
     path = os.path.abspath(path)
     try:
         if sys.platform.startswith("win"):
@@ -126,8 +126,8 @@ class SentinelPro(ctk.CTk):
             font=ctk.CTkFont(size=11),
         ).grid(row=1, column=0, padx=20, pady=(0, 28))
 
-        self.btn_nav_scan = self._nav_button("🔍  Tarama Merkezi", "scan", 2)
-        self.btn_nav_vault = self._nav_button("☣️  Karantina Kasası", "quarantine", 3)
+        self.btn_nav_scan = self._nav_button("🔍  Scan Centre", "scan", 2)
+        self.btn_nav_vault = self._nav_button("☣️  Quarantine Vault", "quarantine", 3)
 
         self.lbl_status = ctk.CTkLabel(
             self.sidebar,
@@ -161,60 +161,60 @@ class SentinelPro(ctk.CTk):
         top.pack(fill="x", padx=26, pady=(20, 14))
 
         ctk.CTkLabel(
-            top, text="YENİ TARAMA GÖREVİ", font=ctk.CTkFont(weight="bold", size=14)
+            top, text="NEW SCAN TASK", font=ctk.CTkFont(weight="bold", size=14)
         ).pack(anchor="w", padx=20, pady=(15, 6))
 
         path_row = ctk.CTkFrame(top, fg_color="transparent")
         path_row.pack(fill="x", padx=10, pady=(0, 10))
         self.entry_path = ctk.CTkEntry(
-            path_row, placeholder_text="Taranacak klasörü seçin…", height=40
+            path_row, placeholder_text="Choose a folder to scan…", height=40
         )
         self.entry_path.pack(side="left", fill="x", expand=True, padx=(10, 10))
         self.entry_path.insert(0, os.path.abspath(self.config_obj.target))
 
-        # Tk'de Ctrl+A varsayılan olarak "satır başına git" demektir; oysa
-        # her kullanıcı "tümünü seç" bekler. Bağlamazsak yazılan yeni yol
-        # mevcut metnin önüne eklenir ve tarama anlaşılmaz biçimde başarısız
-        # olur — GUI testinde tam olarak bu oldu.
+        # In Tk, Ctrl+A means "go to start of line" by default, while
+        # every user expects "select all". Without this binding a newly
+        # typed path is prepended to the existing text and the scan
+        # fails inexplicably - exactly what happened in GUI testing.
         self.entry_path.bind("<Control-a>", self._select_all_path)
         self.entry_path.bind("<Control-A>", self._select_all_path)
         ctk.CTkButton(
-            path_row, text="📂 Seç", width=86, height=40, command=self.browse_folder
+            path_row, text="📂 Browse", width=86, height=40, command=self.browse_folder
         ).pack(side="left", padx=(0, 10))
 
         switches = ctk.CTkFrame(top, fg_color="transparent")
         switches.pack(fill="x", padx=20, pady=(0, 14))
 
         self.switch_ocr = ctk.CTkSwitch(
-            switches, text="OCR (görsel analiz)", progress_color="#eb6834"
+            switches, text="OCR (image analysis)", progress_color="#eb6834"
         )
         self.switch_ocr.pack(side="left", padx=(10, 22))
 
         self.switch_archive = ctk.CTkSwitch(
-            switches, text="Arşiv içine gir (ZIP)", progress_color="#2a78d6"
+            switches, text="Descend into archives (ZIP)", progress_color="#2a78d6"
         )
         self.switch_archive.select()
         self.switch_archive.pack(side="left", padx=(0, 22))
 
         self.switch_quarantine = ctk.CTkSwitch(
-            switches, text="Aktif karantina", progress_color="#d03b3b"
+            switches, text="Active quarantine", progress_color="#d03b3b"
         )
         self.switch_quarantine.pack(side="left", padx=(0, 22))
 
-        ctk.CTkLabel(switches, text="Alt eşik:", font=ctk.CTkFont(size=12)).pack(
+        ctk.CTkLabel(switches, text="Threshold:", font=ctk.CTkFont(size=12)).pack(
             side="left", padx=(10, 6)
         )
         self.option_severity = ctk.CTkOptionMenu(
             switches,
             width=120,
-            values=[severity.label_tr for severity in Severity],
+            values=[severity.label for severity in Severity],
         )
-        self.option_severity.set(Severity.LOW.label_tr)
+        self.option_severity.set(Severity.LOW.label)
         self.option_severity.pack(side="left")
 
         self.btn_start = ctk.CTkButton(
             self.frame_scan,
-            text="🚀 ANALİZİ BAŞLAT",
+            text="🚀 START ANALYSIS",
             height=50,
             font=ctk.CTkFont(size=16, weight="bold"),
             fg_color="#00695c",
@@ -232,15 +232,15 @@ class SentinelPro(ctk.CTk):
         )
         self.lbl_progress.pack(anchor="w", padx=26, pady=(0, 10))
 
-        # Özet şeridi
+        # Summary strip
         self.summary_bar = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
         self.summary_bar.pack(fill="x", padx=26, pady=(0, 10))
         self.summary_labels = {}
         for key, title in (
-            ("risk", "RİSK SKORU"),
-            ("total", "BULGU"),
-            ("files", "DOSYA"),
-            ("duration", "SÜRE"),
+            ("risk", "RISK SCORE"),
+            ("total", "FINDINGS"),
+            ("files", "FILES"),
+            ("duration", "DURATION"),
         ):
             tile = ctk.CTkFrame(self.summary_bar, corner_radius=10)
             tile.pack(side="left", expand=True, fill="x", padx=4)
@@ -251,7 +251,7 @@ class SentinelPro(ctk.CTk):
             value.pack(pady=(0, 10))
             self.summary_labels[key] = value
 
-        # Alt bölüm: bulgular + log/grafik
+        # Lower section: findings plus log and chart
         split = ctk.CTkFrame(self.frame_scan, fg_color="transparent")
         split.pack(fill="both", expand=True, padx=26, pady=(4, 10))
 
@@ -261,10 +261,10 @@ class SentinelPro(ctk.CTk):
         filter_row = ctk.CTkFrame(left, fg_color="transparent")
         filter_row.pack(fill="x", pady=(0, 6))
         ctk.CTkLabel(
-            filter_row, text="Bulgular", font=ctk.CTkFont(size=12, weight="bold")
+            filter_row, text="Findings", font=ctk.CTkFont(size=12, weight="bold")
         ).pack(side="left")
         self.entry_filter = ctk.CTkEntry(
-            filter_row, placeholder_text="filtrele…", width=200, height=28
+            filter_row, placeholder_text="filter…", width=200, height=28
         )
         self.entry_filter.pack(side="right")
         self.entry_filter.bind("<KeyRelease>", lambda _event: self.refresh_findings())
@@ -277,13 +277,13 @@ class SentinelPro(ctk.CTk):
         right.pack_propagate(False)
 
         ctk.CTkLabel(
-            right, text="Risk Dağılımı", font=ctk.CTkFont(size=12, weight="bold")
+            right, text="Risk Distribution", font=ctk.CTkFont(size=12, weight="bold")
         ).pack(pady=(12, 4))
         self.chart_area = ctk.CTkFrame(right, fg_color="transparent")
         self.chart_area.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
         ctk.CTkLabel(
-            right, text="Canlı Terminal", font=ctk.CTkFont(size=12, weight="bold")
+            right, text="Live Terminal", font=ctk.CTkFont(size=12, weight="bold")
         ).pack(pady=(4, 4))
         self.log_area = ctk.CTkTextbox(
             right,
@@ -322,28 +322,28 @@ class SentinelPro(ctk.CTk):
 
         ctk.CTkLabel(
             self.frame_vault,
-            text="KARANTİNA KASASI",
+            text="QUARANTINE VAULT",
             font=ctk.CTkFont(size=24, weight="bold"),
         ).pack(pady=(30, 6))
         ctk.CTkLabel(
             self.frame_vault,
-            text="Dosyalar AES-256-GCM ile şifrelenmiştir. "
-            "Kurtarma, bütünlük doğrulandıktan sonra yapılır.",
+            text="Files are encrypted with AES-256-GCM. "
+            "Recovery happens only after integrity is verified.",
             text_color="gray",
             font=ctk.CTkFont(size=12),
         ).pack(pady=(0, 16))
 
         actions = ctk.CTkFrame(self.frame_vault, fg_color="transparent")
         actions.pack(pady=(0, 10))
-        ctk.CTkButton(actions, text="🔄 Yenile", width=130,
+        ctk.CTkButton(actions, text="🔄 Refresh", width=130,
                       command=self.refresh_vault).pack(side="left", padx=6)
-        ctk.CTkButton(actions, text="🔎 Bütünlük Denetimi", width=180,
+        ctk.CTkButton(actions, text="🔎 Integrity Check", width=180,
                       fg_color="#2a78d6", command=self.verify_vault).pack(
             side="left", padx=6
         )
 
         self.vault_list = ctk.CTkScrollableFrame(
-            self.frame_vault, label_text="Şifreli Dosyalar"
+            self.frame_vault, label_text="Encrypted Files"
         )
         self.vault_list.pack(fill="both", expand=True, padx=44, pady=(10, 26))
 
@@ -377,12 +377,12 @@ class SentinelPro(ctk.CTk):
     def _select_all_path(self, _event=None):
         self.entry_path.select_range(0, "end")
         self.entry_path.icursor("end")
-        return "break"  # Tk'nin "satır başına git" varsayılanını engelle
+        return "break"  # block Tk's default "go to start of line"
 
     def _selected_severity_enum(self) -> Severity:
         label = self.option_severity.get()
         for severity in Severity:
-            if severity.label_tr == label:
+            if severity.label == label:
                 return severity
         return Severity.LOW
 
@@ -392,25 +392,26 @@ class SentinelPro(ctk.CTk):
     def start_scan(self):
         target = self.entry_path.get().strip()
         if not target or not os.path.exists(target):
-            messagebox.showwarning("Uyarı", "Geçerli bir klasör ya da dosya seçin.")
+            messagebox.showwarning("Warning", "Select a valid folder or file.")
             return
 
-        # Onay metni kullanıcının gördüğü etiketi kullanmalı. Ham enum
-        # değeri ('critical') yazmak, hem arayüzün geri kalanıyla
-        # ("Kritik") çelişiyor hem de veri SİLEN bir eylemin onayında
-        # anlaşılırlığı düşürüyordu.
-        esik = self._selected_severity_enum()
+        # The confirmation must use the label the user sees. Printing
+        # the raw enum value ('critical') contradicted the rest of the
+        # interface ("Critical") and reduced clarity in the one dialog
+        # that confirms an action which DELETES data.
+        threshold = self._selected_severity_enum()
         if self.switch_quarantine.get() and not messagebox.askyesno(
-            "Karantina onayı",
-            "Aktif karantina açık.\n\n"
-            f"“{esik.label_tr}” ve üstü bulgu içeren dosyalar "
-            "şifrelenerek kasaya taşınacak ve ORİJİNALLERİ SİLİNECEK.\n\n"
-            "Devam edilsin mi?",
+            "Quarantine confirmation",
+            "Active quarantine is enabled.\n\n"
+            f"Files with findings at \u201c{threshold.label}\u201d or above "
+            "will be encrypted, moved into the vault, and THE ORIGINALS "
+            "DELETED.\n\n"
+            "Continue?",
         ):
             return
 
         self.btn_start.configure(
-            text="🛑 DURDUR",
+            text="🛑 STOP",
             fg_color="#d03b3b",
             hover_color="#e66767",
             command=self.stop_scan,
@@ -419,7 +420,7 @@ class SentinelPro(ctk.CTk):
             button.configure(state="disabled")
 
         self.progress.set(0)
-        self.lbl_progress.configure(text="Dosyalar sıralanıyor…")
+        self.lbl_progress.configure(text="Enumerating files…")
         self.log_area.configure(state="normal")
         self.log_area.delete("1.0", "end")
         self.log_area.configure(state="disabled")
@@ -430,16 +431,16 @@ class SentinelPro(ctk.CTk):
         for label in self.summary_labels.values():
             label.configure(text="—")
 
-        self.log(f"Hedef: {target}")
+        self.log(f"Target: {target}")
 
         thread = threading.Thread(target=self._run_scan, args=(target,), daemon=True)
         thread.start()
 
     def stop_scan(self):
         if self.current_scanner is not None:
-            self.log("⚠️ Durdurma sinyali gönderildi…")
+            self.log("⚠️ Stop signal sent…")
             self.current_scanner.stop_scan()
-            self.btn_start.configure(state="disabled", text="DURDURULUYOR…")
+            self.btn_start.configure(state="disabled", text="STOPPING…")
 
     def _run_scan(self, target: str):
         try:
@@ -450,7 +451,7 @@ class SentinelPro(ctk.CTk):
                 quarantine=bool(self.switch_quarantine.get()),
                 quarantine_min_severity=self._selected_severity(),
                 min_severity=self._selected_severity(),
-                # GUI içinde süreç çatallamak Tk ile sorun çıkarır.
+                # Forking processes inside a GUI causes problems with Tk.
                 executor="thread",
             )
             self.current_scanner = Scanner(
@@ -469,14 +470,14 @@ class SentinelPro(ctk.CTk):
         self.after(
             0,
             self.lbl_progress.configure,
-            {"text": f"{done}/{total} dosya — {os.path.basename(path)}"},
+            {"text": f"{done}/{total} files - {os.path.basename(path)}"},
         )
 
     def _finish(self, result, error):
         self.current_scanner = None
         self.btn_start.configure(
             state="normal",
-            text="🚀 ANALİZİ BAŞLAT",
+            text="🚀 START ANALYSIS",
             fg_color="#00695c",
             hover_color="#004d40",
             command=self.start_scan,
@@ -484,15 +485,15 @@ class SentinelPro(ctk.CTk):
 
         if error is not None:
             self.lbl_progress.configure(text="")
-            self.log(f"❌ KRİTİK HATA: {error}")
-            messagebox.showerror("Hata", f"Tarama başarısız oldu:\n{error}")
+            self.log(f"❌ CRITICAL ERROR: {error}")
+            messagebox.showerror("Error", f"The scan failed:\n{error}")
             return
 
         self.result = result
         self.progress.set(1)
         self.lbl_progress.configure(
-            text=f"{result.files_scanned} dosya tarandı · "
-            f"{result.files_skipped} atlandı · {len(result.errors)} hata"
+            text=f"{result.files_scanned} files scanned · "
+            f"{result.files_skipped} skipped · {len(result.errors)} errors"
         )
 
         self.summary_labels["risk"].configure(text=str(result.risk_score))
@@ -504,8 +505,8 @@ class SentinelPro(ctk.CTk):
         self._draw_chart()
 
         if not result.findings:
-            self.log("✅ Sistem temiz — eşik üstü hassas veri bulunamadı.")
-            messagebox.showinfo("Temiz", "Tehdit bulunamadı.")
+            self.log("✅ System clean - no sensitive data at or above the threshold.")
+            messagebox.showinfo("Clean", "No threats found.")
             return
 
         for button in (self.btn_html, self.btn_pdf, self.btn_csv, self.btn_sarif):
@@ -513,16 +514,16 @@ class SentinelPro(ctk.CTk):
 
         counts = result.counts_by_severity()
         self.log(
-            f"⚠️ {len(result.findings)} bulgu — kritik: {counts.get('critical', 0)}, "
-            f"yüksek: {counts.get('high', 0)}"
+            f"⚠️ {len(result.findings)} findings - critical: {counts.get('critical', 0)}, "
+            f"high: {counts.get('high', 0)}"
         )
         if result.quarantined:
-            self.log(f"☣️ {len(result.quarantined)} dosya karantinaya alındı.")
+            self.log(f"☣️ {len(result.quarantined)} files moved to quarantine.")
 
         messagebox.showwarning(
             "Alarm",
-            f"{len(result.findings)} riskli veri tespit edildi.\n"
-            f"Risk skoru: {result.risk_score}/100",
+            f"{len(result.findings)} risky values detected.\n"
+            f"Risk score: {result.risk_score}/100",
         )
 
     # ------------------------------------------------------------------
@@ -544,7 +545,7 @@ class SentinelPro(ctk.CTk):
         if not findings:
             ctk.CTkLabel(
                 self.findings_frame,
-                text="Gösterilecek bulgu yok." if needle else "Henüz tarama yapılmadı.",
+                text="No findings to show." if needle else "No scan has run yet.",
                 text_color="gray",
             ).pack(pady=20)
             return
@@ -556,7 +557,7 @@ class SentinelPro(ctk.CTk):
 
             ctk.CTkLabel(
                 row,
-                text=f"{severity.icon} {severity.label_tr}",
+                text=f"{severity.icon} {severity.label}",
                 text_color=SEVERITY_COLORS[severity],
                 font=ctk.CTkFont(size=11, weight="bold"),
                 width=84,
@@ -591,8 +592,8 @@ class SentinelPro(ctk.CTk):
         if len(findings) > MAX_ROWS:
             ctk.CTkLabel(
                 self.findings_frame,
-                text=f"… ve {len(findings) - MAX_ROWS} bulgu daha "
-                "(tam liste için rapor kaydedin)",
+                text=f"… and {len(findings) - MAX_ROWS} more findings "
+                "(save a report for the full list)",
                 text_color="gray",
             ).pack(pady=10)
 
@@ -610,14 +611,14 @@ class SentinelPro(ctk.CTk):
         ]
 
         if not HAS_MATPLOTLIB:
-            # Grafik kütüphanesi yoksa aynı bilgiyi çubuklarla göster.
+            # Without a charting library, show the same information as bars.
             total = sum(count for _, count in rows) or 1
             for severity, count in rows:
                 line = ctk.CTkFrame(self.chart_area, fg_color="transparent")
                 line.pack(fill="x", pady=4)
                 ctk.CTkLabel(
                     line,
-                    text=f"{severity.icon} {severity.label_tr}",
+                    text=f"{severity.icon} {severity.label}",
                     text_color=SEVERITY_COLORS[severity],
                     font=ctk.CTkFont(size=11, weight="bold"),
                     width=90,
@@ -637,7 +638,7 @@ class SentinelPro(ctk.CTk):
         figure.patch.set_facecolor("#1a1a19")
         axes.set_facecolor("#1a1a19")
 
-        labels = [severity.label_tr for severity, _ in rows]
+        labels = [severity.label for severity, _ in rows]
         values = [count for _, count in rows]
         colors = [SEVERITY_COLORS[severity] for severity, _ in rows]
 
@@ -672,7 +673,7 @@ class SentinelPro(ctk.CTk):
         path = filedialog.asksaveasfilename(
             defaultextension=extensions[fmt],
             initialfile=f"sentinel_raporu{extensions[fmt]}",
-            filetypes=[(f"{fmt.upper()} dosyası", f"*{extensions[fmt]}")],
+            filetypes=[(f"{fmt.upper()} file", f"*{extensions[fmt]}")],
         )
         if not path:
             return
@@ -681,14 +682,14 @@ class SentinelPro(ctk.CTk):
         written = write_reports(self.result, directory, [fmt])
         produced = written.get(fmt, "")
 
-        if str(produced).startswith("HATA"):
-            messagebox.showerror("Hata", f"Rapor yazılamadı:\n{produced}")
+        if str(produced).startswith("ERROR"):
+            messagebox.showerror("Error", f"Could not write the report:\n{produced}")
             return
 
         if os.path.abspath(produced) != os.path.abspath(path):
             os.replace(produced, path)
 
-        self.log(f"Rapor kaydedildi: {path}")
+        self.log(f"Report saved: {path}")
         open_path(path)
 
     # ------------------------------------------------------------------
@@ -700,7 +701,7 @@ class SentinelPro(ctk.CTk):
         if not items:
             ctk.CTkLabel(
                 self.vault_list,
-                text=f"Kasa boş.\n{self.qm.q_dir}",
+                text=f"The vault is empty.\n{self.qm.q_dir}",
                 text_color="gray",
             ).pack(pady=24)
             return
@@ -714,13 +715,13 @@ class SentinelPro(ctk.CTk):
 
             title = "🔒 " + item["name"]
             if item.get("legacy"):
-                title += "   (eski format)"
+                title += "   (legacy format)"
             ctk.CTkLabel(
                 info, text=title, font=ctk.CTkFont(size=12, weight="bold"), anchor="w"
             ).pack(fill="x")
             ctk.CTkLabel(
                 info,
-                text=item.get("original_path") or "(orijinal konum bilinmiyor)",
+                text=item.get("original_path") or "(original location unknown)",
                 text_color="gray",
                 font=ctk.CTkFont(size=10),
                 anchor="w",
@@ -728,7 +729,7 @@ class SentinelPro(ctk.CTk):
 
             ctk.CTkButton(
                 row,
-                text="Kurtar",
+                text="Recover",
                 width=84,
                 fg_color="#6250d6",
                 command=lambda name=item["name"]: self.restore(name),
@@ -737,35 +738,35 @@ class SentinelPro(ctk.CTk):
     def verify_vault(self):
         results = self.qm.verify_all()
         if not results:
-            messagebox.showinfo("Bütünlük", "Kasa boş.")
+            messagebox.showinfo("Integrity", "The vault is empty.")
             return
         bad = [entry for entry in results if not entry["ok"]]
         if bad:
             detail = "\n".join(f"✗ {entry['name']}: {entry['detail']}" for entry in bad)
             messagebox.showerror(
-                "Bütünlük hatası", f"{len(bad)} dosya doğrulanamadı:\n\n{detail}"
+                "Integrity error", f"{len(bad)} files failed verification:\n\n{detail}"
             )
         else:
             messagebox.showinfo(
-                "Bütünlük", f"{len(results)} dosyanın tamamı doğrulandı."
+                "Integrity", f"All {len(results)} files verified."
             )
 
     def restore(self, name: str):
         full = os.path.join(self.qm.q_dir, name)
         ok, message = self.qm.restore_file(full)
 
-        if not ok and "üzerine yazılmadı" in message:
+        if not ok and "not overwritten" in message:
             if messagebox.askyesno(
-                "Dosya mevcut",
-                f"{message}\n\nÜzerine yazılsın mı?",
+                "File exists",
+                f"{message}\n\nOverwrite it?",
             ):
                 ok, message = self.qm.restore_file(full, force=True)
 
         if ok:
-            messagebox.showinfo("Başarılı", f"Dosya kurtarıldı:\n{message}")
+            messagebox.showinfo("Success", f"File recovered:\n{message}")
             self.refresh_vault()
         else:
-            messagebox.showerror("Hata", f"Kurtarılamadı:\n{message}")
+            messagebox.showerror("Error", f"Could not recover it:\n{message}")
 
 
 def main():

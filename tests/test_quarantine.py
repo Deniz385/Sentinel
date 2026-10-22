@@ -1,10 +1,10 @@
-"""Karantina kasası testleri.
+"""Quarantine vault tests.
 
-v3.0'ın iki kritik kusuru burada doğrulanır:
+Two critical defects from v3.0 are verified here:
 
-* "şifreleme" ``base64(reverse(bytes))`` idi — artık AES-256-GCM,
-* orijinal dosya şifreli kopya **doğrulanmadan** siliniyordu — artık
-  doğrulama başarısızsa orijinal yerinde kalır.
+* the "encryption" was ``base64(reverse(bytes))`` - it is now AES-256-GCM,
+* the original was deleted **without verifying** the encrypted copy -
+  now the original stays in place when verification fails.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from sentinel.quarantine import MAGIC, QuarantineManager, VaultError
 
 pytest.importorskip("cryptography")
 
-SECRET = "Müşteri TC: 10000000146\nKart: 4111111111111111\n"
+SECRET = "Customer ID: 10000000146\nCard: 4111111111111111\n"
 
 
 def _read(path: str) -> bytes:
@@ -35,7 +35,7 @@ def _write(path: str, data: bytes):
 
 @pytest.fixture
 def vault(tmp_path, monkeypatch):
-    """Her test izole bir kasa ve anahtar kullanır."""
+    """Every test uses an isolated vault and key."""
     key = base64.b64encode(os.urandom(32)).decode("ascii")
     monkeypatch.setenv("SENTINEL_VAULT_KEY", key)
     return QuarantineManager(str(tmp_path / "kasa"))
@@ -43,15 +43,15 @@ def vault(tmp_path, monkeypatch):
 
 @pytest.fixture
 def victim(tmp_path):
-    """Kurbanı **bayt olarak** yazar.
+    """Write the victim file **as bytes**.
 
-    `write_text` Windows'ta `\\n` -> `\\r\\n` çevirisi yapar, yani diskteki
-    baytlar `SECRET.encode()`'dan farklı olur. Kasa (doğru biçimde)
-    *dosya baytlarını* hash'lediği için manifest testi yalnızca Windows'ta
-    düşüyordu. Donanımı bayt-kesin yazmak, testi platformdan bağımsız
-    kılar ve ölçtüğü şeyi (adli bilişim hash'i) bozmadan bırakır.
+    On Windows `write_text` translates `\\n` to `\\r\\n`, so the bytes on
+    disk differ from `SECRET.encode()`. Because the vault (correctly)
+    hashes the *file bytes*, the manifest test failed on Windows only.
+    Writing the fixture byte-exactly makes the test platform
+    independent without weakening what it measures (a forensic hash).
     """
-    path = tmp_path / "veri" / "gizli.txt"
+    path = tmp_path / "data" / "secret.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(SECRET.encode("utf-8"))
     return path
@@ -65,7 +65,7 @@ class TestQuarantine:
         assert os.path.isfile(enc_path)
 
     def test_encrypted_blob_is_not_readable(self, vault, victim):
-        """Asıl mesele: dosya gerçekten şifrelenmeli, gizlenmemeli."""
+        """The core point: the file must be encrypted, not obfuscated."""
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
         blob = _read(enc_path)
@@ -73,7 +73,7 @@ class TestQuarantine:
         assert blob.startswith(MAGIC)
         assert b"10000000146" not in blob
         assert b"4111111111111111" not in blob
-        # v3.0'ın şifresi tek satırla çözülüyordu; artık çözülmemeli.
+        # The v3.0 cipher was reversible in one line; it must not be now.
         try:
             naive = base64.b64decode(blob)[::-1]
         except Exception:
@@ -91,9 +91,9 @@ class TestQuarantine:
         assert victim.read_bytes() == original
 
     def test_manifest_records_provenance(self, vault, victim):
-        # Donanımın bayt-kesin yazdığını önce doğrula: aksi hâlde aşağıdaki
-        # hash karşılaştırması platforma göre değişir ve hata, kasayı
-        # suçlayan anlaşılmaz bir mesaja dönüşür.
+        # Check first that the fixture wrote byte-exactly: otherwise the
+        # hash comparison below varies by platform and the failure turns
+        # into a confusing message that blames the vault.
         assert victim.read_bytes() == SECRET.encode("utf-8")
 
         ok, enc_path = vault.quarantine_file(str(victim))
@@ -108,7 +108,7 @@ class TestQuarantine:
     def test_missing_file(self, vault, tmp_path):
         ok, message = vault.quarantine_file(str(tmp_path / "yok.txt"))
         assert not ok
-        assert "bulunamadı" in message
+        assert "not found" in message
 
 
 class TestIntegrity:
@@ -122,10 +122,10 @@ class TestIntegrity:
 
         ok, message = intruder.restore_file(enc_path)
         assert not ok
-        assert "Çözme başarısız" in message
+        assert "Decryption failed" in message
 
     def test_tampered_ciphertext_is_detected(self, vault, victim):
-        """AES-GCM kimlik doğrulamalıdır: tek bitlik değişiklik yakalanır."""
+        """AES-GCM is authenticated: a single flipped bit is caught."""
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
 
@@ -135,10 +135,10 @@ class TestIntegrity:
 
         ok, message = vault.restore_file(enc_path)
         assert not ok
-        assert "kurcalanmış" in message or "başarısız" in message
+        assert "tampered" in message or "failed" in message
 
     def test_tampered_header_is_detected(self, vault, victim):
-        """Başlık AAD olarak bağlıdır; manifest kurcalanamaz."""
+        """The header is bound as AAD; the manifest cannot be tampered with."""
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
 
@@ -153,7 +153,7 @@ class TestIntegrity:
     def test_original_survives_when_verification_fails(
         self, vault, victim, monkeypatch
     ):
-        """En kritik davranış: doğrulama başarısızsa orijinal SİLİNMEZ."""
+        """The most important behaviour: on failed verification the original is NOT deleted."""
         monkeypatch.setattr(
             QuarantineManager,
             "_decrypt",
@@ -161,10 +161,10 @@ class TestIntegrity:
         )
         ok, message = vault.quarantine_file(str(victim))
         assert not ok
-        assert "orijinal korundu" in message
+        assert "original kept" in message
         assert victim.exists()
         assert victim.read_text(encoding="utf-8") == SECRET
-        # Bozuk .enc kasada bırakılmamalı.
+        # A corrupt .enc must not be left in the vault.
         assert not any(name.endswith(".enc") for name in os.listdir(vault.q_dir))
 
     def test_verify_all(self, vault, victim):
@@ -179,17 +179,17 @@ class TestRestoreSafety:
     def test_refuses_to_overwrite(self, vault, victim):
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
-        victim.write_text("yeni icerik", encoding="utf-8")
+        victim.write_text("new content", encoding="utf-8")
 
         ok, message = vault.restore_file(enc_path)
         assert not ok
-        assert "üzerine yazılmadı" in message
-        assert victim.read_text(encoding="utf-8") == "yeni icerik"
+        assert "not overwritten" in message
+        assert victim.read_text(encoding="utf-8") == "new content"
 
     def test_force_overwrites(self, vault, victim):
         ok, enc_path = vault.quarantine_file(str(victim))
         assert ok
-        victim.write_text("yeni icerik", encoding="utf-8")
+        victim.write_text("new content", encoding="utf-8")
 
         ok, _ = vault.restore_file(enc_path, force=True)
         assert ok
@@ -224,22 +224,22 @@ class TestRestoreSafety:
 
 class TestLegacyCompatibility:
     def test_reads_v3_base64_format(self, vault, tmp_path):
-        """Kullanıcıların kasasındaki eski dosyalar okunabilir kalmalı."""
+        """Old files in users' vaults must stay readable."""
         legacy_blob = base64.b64encode(SECRET.encode("utf-8")[::-1])
         enc_path = os.path.join(vault.q_dir, "1700000000_eski.txt.enc")
         _write(enc_path, legacy_blob)
 
-        target = tmp_path / "geri" / "eski.txt"
+        target = tmp_path / "restored" / "old.txt"
         ok, restored = vault.restore_file(enc_path, str(target))
         assert ok, restored
         assert target.read_text(encoding="utf-8") == SECRET
 
     def test_reads_v3_json_manifest(self, vault, tmp_path):
-        legacy_blob = base64.b64encode(b"veri"[::-1])
+        legacy_blob = base64.b64encode(b"data"[::-1])
         name = "1700000000_eski.txt.enc"
         _write(os.path.join(vault.q_dir, name), legacy_blob)
 
-        target = tmp_path / "hedef" / "eski.txt"
+        target = tmp_path / "destination" / "old.txt"
         with open(vault.legacy_log_file, "w", encoding="utf-8") as handle:
             json.dump({name: {"original_path": str(target)}}, handle)
 
@@ -248,9 +248,9 @@ class TestLegacyCompatibility:
         assert os.path.abspath(restored) == os.path.abspath(str(target))
 
     def test_reads_enc_meta_sidecar(self, vault, tmp_path):
-        """QUARANTINE_ZONE dizinindeki `.enc.meta` yan dosyaları."""
-        name = "Yeni Metin Belgesi.txt.enc"
-        _write(os.path.join(vault.q_dir, name), base64.b64encode(b"icerik"[::-1]))
+        """The `.enc.meta` sidecar files in a QUARANTINE_ZONE directory."""
+        name = "New Text Document.txt.enc"
+        _write(os.path.join(vault.q_dir, name), base64.b64encode(b"content"[::-1]))
         target = tmp_path / "meta_hedef.txt"
         with open(
             os.path.join(vault.q_dir, f"{name}.meta"), "w", encoding="utf-8"
@@ -266,8 +266,8 @@ class TestLegacyCompatibility:
         assert os.path.abspath(restored) == os.path.abspath(str(target))
 
     def test_legacy_blob_rejects_garbage(self, vault):
-        enc_path = os.path.join(vault.q_dir, "bozuk.enc")
-        _write(enc_path, b"\xff\xfe bu base64 degil \x00")
+        enc_path = os.path.join(vault.q_dir, "corrupt.enc")
+        _write(enc_path, b"\xff\xfe this is not base64 \x00")
         ok, _ = vault.restore_file(enc_path)
         assert not ok
 
@@ -309,7 +309,7 @@ class TestKeyManagement:
         if os.name != "nt":
             assert oct(os.stat(path).st_mode)[-3:] == "600"
 
-        # Aynı anahtar tekrar yüklenmeli (yoksa eski kasa açılamaz).
+        # The same key must load again, or an old vault cannot be opened.
         assert load_or_create_key() == key
 
     def test_key_is_stored_outside_the_vault(self, tmp_path, monkeypatch):
@@ -347,10 +347,10 @@ class TestEngineIntegration:
         from sentinel.engine import Scanner
         from sentinel.severity import Severity
 
-        (tmp_path / "kritik.txt").write_text(
-            "Kart: 4111111111111111\n", encoding="utf-8"
+        (tmp_path / "critical.txt").write_text(
+            "Card: 4111111111111111\n", encoding="utf-8"
         )
-        (tmp_path / "dusuk.txt").write_text("mail: a@adu.edu.tr\n", encoding="utf-8")
+        (tmp_path / "low.txt").write_text("mail: a@university.edu\n", encoding="utf-8")
 
         config = ScanConfig(
             min_severity=Severity.INFO.value,
@@ -365,11 +365,11 @@ class TestEngineIntegration:
         result = Scanner(str(tmp_path), config=config).scan()
 
         assert len(result.quarantined) == 1
-        assert not (tmp_path / "kritik.txt").exists()
-        assert (tmp_path / "dusuk.txt").exists()
+        assert not (tmp_path / "critical.txt").exists()
+        assert (tmp_path / "low.txt").exists()
 
     def test_reveal_does_not_raise(self, vault, tmp_path):
-        """v3.0 burada `subprocess`'i import etmeyi unutmuştu."""
+        """v3.0 forgot to import `subprocess` here."""
         path = tmp_path / "x.txt"
         path.write_text("x", encoding="utf-8")
         assert isinstance(vault.reveal(str(path)), bool)

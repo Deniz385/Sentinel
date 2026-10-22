@@ -1,25 +1,24 @@
-"""Artımlı tarama önbelleği.
+"""Incremental scan cache.
 
-Her gece 500 GB'lık bir dosya paylaşımını baştan taramak, o paylaşımın
-%99'u değişmemişken, harcanan sürenin neredeyse tamamının israf olduğu
-anlamına gelir. Burada tutulan ``(yol → mtime_ns, boyut, bulgular)``
-kaydı değişmemiş dosyaları tekrar okumadan geçer.
+Re-reading a 500 GB file share from scratch every night, when 99% of it
+has not changed, means nearly all of that time is wasted. The record
+kept here - ``(path -> mtime_ns, size, findings)`` - skips unchanged
+files without reading them again.
 
-Bir güvenlik aracında önbellek, yanlış kullanıldığında **sızıntıyı
-görünmez yapan** bir mekanizmadır. Bu yüzden üç kural:
+In a security tool a cache is, if built carelessly, the mechanism that
+makes a leak **invisible**. Hence three rules:
 
-1. **Yapılandırma veya kural kataloğu değişirse önbellek tamamen
-   düşer.** Yeni bir kural eklendiğinde eski kararların geçerliliği
-   kalmaz; tek bir bayat kayıt, yeni kuralın bulacağı sırrı gizler.
-2. **Hata kayıtları önbelleğe alınmaz.** Geçici bir okuma hatası
-   (kilitli dosya, ağ kesintisi) dosyayı sonsuza kadar görünmez
-   yapmamalı.
-3. **Karantina açıkken önbellek hiç kullanılmaz** (motor tarafından
-   uygulanır): veri silen bir karara bayat kanıtla varılmaz.
+1. **If the configuration or the rule catalogue changes, the whole cache
+   is dropped.** Once a new rule exists the old verdicts no longer hold;
+   a single stale entry hides the secret that rule would have found.
+2. **Error results are never cached.** A transient read failure (a
+   locked file, a network blip) must not make a file invisible forever.
+3. **The cache is never used while quarantine is on** (enforced by the
+   engine): a decision that deletes data cannot rest on stale evidence.
 
-Tazelik ölçütü ``(st_mtime_ns, st_size)``. Bu bir sezgidir, kanıt değil:
-mtime'ı elle geri alan bir saldırgan dosyayı atlatabilir. Adli bilişim
-kesinliği gerektiğinde önbellek kullanılmaz (varsayılan: kapalı).
+The freshness test is ``(st_mtime_ns, st_size)``. That is a heuristic,
+not proof: an attacker who restores mtime by hand can slip past it. When
+forensic certainty is required the cache stays off (the default).
 """
 
 from __future__ import annotations
@@ -42,16 +41,16 @@ __all__ = [
 
 DEFAULT_CACHE_NAME = ".sentinel-cache.json"
 
-#: Biçim sürümü. Artırıldığında eski önbellekler sessizce yok sayılır.
+#: Format version. Bumping it makes older caches be ignored silently.
 CACHE_SCHEMA = 1
 
-#: Önbellekte tutulan azami kayıt. Aşıldığında en eski görülenler atılır
-#: (önbellek dosyası sınırsız büyüyemez).
+#: Maximum number of entries kept. Beyond this the least recently seen
+#: are dropped, so the cache file cannot grow without bound.
 MAX_ENTRIES = 200_000
 
-#: Sonuçları **etkilemeyen** ayarlar: bunlar değiştiğinde önbellek geçerli
-#: kalır. Geri kalan her alan parmak izine girer — şüphede kalındığında
-#: önbelleği düşürmek, bir bulguyu kaçırmaktan iyidir.
+#: Settings that do **not** affect results: when these change the cache
+#: stays valid. Every other field goes into the fingerprint - when in
+#: doubt, dropping the cache beats missing a finding.
 _IRRELEVANT_FIELDS = frozenset(
     {
         "target",
@@ -73,13 +72,13 @@ _IRRELEVANT_FIELDS = frozenset(
 
 
 def _yara_signature(config) -> list:
-    """`rules/*.yar` dosyalarının imzası.
+    """A signature of the ``rules/*.yar`` files.
 
-    YARA kuralları da tıpkı desen kataloğu gibi kararları belirler.
-    Yapılandırmada yalnızca *dizin yolu* duruyor, bu yüzden bir kural
-    dosyasını düzenlemek fingerprint'i değiştirmez ve yeni kuralın
-    bulacağı şey önbelleğin arkasında kalırdı. Dosyaları okumaya gerek
-    yok: ad + mtime + boyut yeterli bir imzadır.
+    YARA rules determine verdicts just as the pattern catalogue does.
+    The configuration holds only the *directory path*, so editing a rule
+    file would not change the fingerprint and whatever the new rule would
+    find would stay hidden behind the cache. There is no need to read the
+    files: name plus mtime plus size is signature enough.
     """
     if not config.yara_enabled:
         return []
@@ -102,11 +101,11 @@ def _yara_signature(config) -> list:
 
 
 def config_fingerprint(config) -> str:
-    """Yapılandırma + kural kataloğu + sürüm için kararlı özet.
+    """A stable digest of configuration, rule catalogue and version.
 
-    Sürüm de dâhil: bir yükseltme doğrulayıcıları ya da entropi
-    buluşsallarını değiştirmiş olabilir, bu yüzden yeni sürüm eski
-    kararları devralmaz.
+    The version is included too: an upgrade may have changed the
+    validators or the entropy heuristics, so a new version does not
+    inherit the old verdicts.
     """
     from sentinel.patterns import PATTERN_DEFS
 
@@ -145,19 +144,19 @@ class CacheStats:
 
 @dataclass
 class ScanCache:
-    """Diskteki artımlı tarama kaydı."""
+    """The incremental scan record on disk."""
 
     path: str
     config_hash: str
     entries: dict = field(default_factory=dict)
     stats: CacheStats = field(default_factory=CacheStats)
-    #: Yüklenen önbellek bu çalıştırmanın yapılandırmasıyla uyuşmadı mı?
+    #: Did the loaded cache fail to match this run's configuration?
     invalidated: bool = False
 
     # ------------------------------------------------------------------
     @classmethod
     def open(cls, path: str, config) -> ScanCache:
-        """Önbelleği okur; uyumsuz ya da bozuksa boş başlar."""
+        """Read the cache; start empty when it is incompatible or corrupt."""
         fingerprint = config_fingerprint(config)
         cache = cls(path=path, config_hash=fingerprint)
 
@@ -165,7 +164,7 @@ class ScanCache:
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
         except (OSError, ValueError):
-            # Yok, okunamıyor ya da bozuk: boş önbellek tam tarama demektir.
+            # Missing, unreadable or corrupt: an empty cache means a full scan.
             return cache
 
         if not isinstance(data, dict):
@@ -173,7 +172,7 @@ class ScanCache:
         if data.get("schema") != CACHE_SCHEMA:
             return cache
         if data.get("config_hash") != fingerprint:
-            # Kurallar ya da ayarlar değişti: tüm kayıtlar geçersiz.
+            # Rules or settings changed: every entry is invalid.
             cache.invalidated = True
             return cache
 
@@ -192,7 +191,7 @@ class ScanCache:
         return os.path.abspath(path).replace(os.sep, "/")
 
     def lookup(self, path: str):
-        """Dosya değişmemişse önbellekten `FileReport` üretir, yoksa `None`."""
+        """Build a `FileReport` from the cache when the file is unchanged."""
         from sentinel.engine import FileReport
         from sentinel.findings import Finding
 
@@ -214,7 +213,7 @@ class ScanCache:
         try:
             findings = [Finding.from_dict(item) for item in entry.get("findings", [])]
         except (TypeError, ValueError):
-            # Kayıt bozuksa önbelleği değil dosyayı tekrar tara.
+            # If the entry is damaged, rescan the file rather than the cache.
             self.stats.misses += 1
             return None
 
@@ -229,9 +228,9 @@ class ScanCache:
         )
 
     def remember(self, report) -> None:
-        """Taze bir tarama sonucunu kaydeder."""
+        """Record the result of a fresh scan."""
         if report.error:
-            # Geçici bir hata dosyayı kalıcı olarak görünmez yapmasın.
+            # A transient failure must not make a file invisible for good.
             return
         if report.cached:
             return
@@ -251,7 +250,7 @@ class ScanCache:
 
     # ------------------------------------------------------------------
     def save(self) -> bool:
-        """Önbelleği atomik olarak yazar. Başarısızlık taramayı düşürmez."""
+        """Write the cache atomically. A failure never fails the scan."""
         entries = self.entries
         if len(entries) > MAX_ENTRIES:
             newest = sorted(
@@ -278,8 +277,8 @@ class ScanCache:
             os.replace(temporary, self.path)
             return True
         except OSError:
-            # Yarım yazılmış bir önbellek, bozuk bir önbellekten iyidir:
-            # geçici dosyayı temizle ve sessizce vazgeç.
+            # A half-written cache is worse than no cache: clean up the
+            # temporary file and give up quietly.
             try:
                 os.unlink(temporary)
             except OSError:
@@ -288,7 +287,7 @@ class ScanCache:
 
 
 def clear_cache(path: str) -> bool:
-    """Önbellek dosyasını siler. Yoksa `False` döner."""
+    """Delete the cache file. Returns `False` when there was none."""
     try:
         os.unlink(path)
         return True

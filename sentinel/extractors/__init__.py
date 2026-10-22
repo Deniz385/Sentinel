@@ -1,12 +1,13 @@
-"""Dosya biçimi → metin çıkarıcıları.
+"""File format to text extractors.
 
-Eski `scanner.py` tüm biçimleri tek fonksiyonda `elif` zinciriyle
-işliyordu; `.docx` düz metin olarak okunuyor (ZIP binary çöpü) ve ZIP
-desteği hiç yoktu. Burada her biçim kendi modülünde, ortak bir arayüzle:
+The old `scanner.py` handled every format in one function through a
+chain of `elif`s; `.docx` was read as plain text (ZIP binary noise) and
+there was no ZIP support at all. Here each format lives in its own
+module behind a shared interface:
 
     extract(path, config) -> Iterator[TextChunk]
 
-Akış (streaming) tasarımı büyük dosyaların belleğe sığmasını gerektirmez.
+The streaming design means large files never have to fit in memory.
 """
 
 from __future__ import annotations
@@ -19,11 +20,11 @@ __all__ = ["TextChunk", "ExtractionError", "extract", "supports", "EXTRACTORS"]
 
 @dataclass(frozen=True)
 class TextChunk:
-    """Taranacak metin parçası.
+    """A chunk of text to scan.
 
-    `source` kullanıcıya gösterilen konumdur; arşiv üyeleri için
-    ``arsiv.zip::klasor/dosya.txt`` biçimini alır. `line_offset`, parça
-    halinde okunan büyük dosyalarda satır numaralarını doğru tutar.
+    `source` is the location shown to the user; for archive members it
+    takes the form ``archive.zip::folder/file.txt``. `line_offset` keeps
+    line numbers correct in large files read chunk by chunk.
     """
 
     text: str
@@ -33,11 +34,11 @@ class TextChunk:
 
 
 class ExtractionError(Exception):
-    """Dosya okunamadı / biçim bozuk."""
+    """The file could not be read, or the format is corrupt."""
 
 
 def _registry():
-    # Döngüsel import olmaması için tembel yükleme.
+    # Lazy import to avoid a circular import.
     from sentinel.extractors import archive, image, office, pdf, plain
 
     return (
@@ -66,15 +67,16 @@ def _resolve(path: str):
 
 
 def supports(path: str) -> bool:
-    """Bu dosya için özel bir çıkarıcı var mı?"""
+    """Is there a dedicated extractor for this file?"""
     return _resolve(path) is not None
 
 
 def extract(path: str, config, depth: int = 0):
-    """Dosyadan metin parçaları üretir.
+    """Yield chunks of text from a file.
 
-    Bilinen bir çıkarıcı yoksa dosya düz metin olarak denenir; böylece
-    uzantısız yapılandırma dosyaları (`Dockerfile`, `.env.prod`) da taranır.
+    With no known extractor the file is tried as plain text, so
+    extensionless configuration files (`Dockerfile`, `.env.prod`) are
+    scanned too.
     """
     from sentinel.extractors import archive, plain
 

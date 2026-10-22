@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Karantina kurtarma aracı (bağımsız).
+"""Standalone quarantine recovery tool.
 
-GUI açılmadan tek bir dosyayı kasadan geri almak için. Tkinter varsa
-dosya seçici açar; yoksa komut satırı argümanıyla çalışır:
+For pulling a single file back out of the vault without opening the
+GUI. With Tkinter available it shows a file picker; otherwise it takes
+a command-line argument:
 
-    python restore_tool.py KARANTINA_BOLGESI/<zaman>_<ozet>_veri.txt.enc
+    python restore_tool.py KARANTINA_BOLGESI/<time>_<digest>_data.txt.enc
 
-`sentinel vault restore <ad>` komutu da aynı işi yapar.
+The `sentinel vault restore <name>` command does the same thing.
 """
 
 import os
@@ -28,7 +29,7 @@ def _pick_dir() -> str:
 
 def _restore(manager: QuarantineManager, path: str, notify) -> bool:
     ok, message = manager.restore_file(path)
-    if not ok and "üzerine yazılmadı" in message:
+    if not ok and "not overwritten" in message:
         if notify("confirm", message):
             ok, message = manager.restore_file(path, force=True)
     notify("ok" if ok else "error", message)
@@ -40,9 +41,9 @@ def _cli(path: str) -> int:
 
     def notify(kind, message):
         if kind == "confirm":
-            answer = input(f"{message}\nÜzerine yazılsın mı? [e/H] ").strip().lower()
-            return answer in ("e", "y", "evet", "yes")
-        prefix = "[OK]" if kind == "ok" else "[HATA]"
+            answer = input(f"{message}\nOverwrite it? [y/N] ").strip().lower()
+            return answer in ("y", "yes")
+        prefix = "[OK]" if kind == "ok" else "[ERROR]"
         print(f"{prefix} {message}", file=sys.stderr if kind == "error" else sys.stdout)
         return None
 
@@ -60,25 +61,25 @@ def _gui() -> int:
     manager = QuarantineManager(quarantine_dir)
 
     messagebox.showinfo(
-        "Dosya Seç",
-        "Kurtarılacak şifreli (.enc) dosyayı seçin.\n"
-        "Dosya, manifestteki orijinal konumuna geri yüklenecek.",
+        "Select a file",
+        "Choose the encrypted (.enc) file to recover.\n"
+        "It will be restored to the original location in the manifest.",
     )
     selected = filedialog.askopenfilename(
         initialdir=quarantine_dir,
-        title="Kurtarılacak Dosyayı Seç",
-        filetypes=[("Şifreli Dosyalar", "*.enc"), ("Tüm Dosyalar", "*.*")],
+        title="Select the file to recover",
+        filetypes=[("Encrypted files", "*.enc"), ("All files", "*.*")],
     )
     if not selected:
         return 0
 
     def notify(kind, message):
         if kind == "confirm":
-            return messagebox.askyesno("Dosya mevcut", f"{message}\n\nÜzerine yazılsın mı?")
+            return messagebox.askyesno("File exists", f"{message}\n\nOverwrite it?")
         if kind == "ok":
-            messagebox.showinfo("Başarılı", f"Dosya geri yüklendi:\n\n{message}")
+            messagebox.showinfo("Success", f"File restored:\n\n{message}")
         else:
-            messagebox.showerror("Hata", f"Dosya kurtarılamadı:\n{message}")
+            messagebox.showerror("Error", f"Could not recover the file:\n{message}")
         return None
 
     return 0 if _restore(manager, selected, notify) else 1
@@ -91,8 +92,8 @@ def main() -> int:
         return _gui()
     except ImportError:
         print(
-            "Tkinter yok. Dosya yolunu argüman olarak verin:\n"
-            "    python restore_tool.py <yol>/<dosya>.enc",
+            "Tkinter is unavailable. Pass the file path as an argument:\n"
+            "    python restore_tool.py <path>/<file>.enc",
             file=sys.stderr,
         )
         return 2

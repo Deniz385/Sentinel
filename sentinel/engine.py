@@ -1,14 +1,17 @@
-"""Tarama motoru.
+"""The scan engine.
 
-Önceki sürümün üç temel kusuru burada giderilir:
+Three fundamental defects of the previous version are fixed here:
 
-1. ``start_scan_parallel()`` adı paralellik vaat ediyordu ama düz bir
-   ``os.walk`` döngüsüydü. Artık gerçekten çok süreçli/çok iş parçacıklı.
-2. Dosya hash'i **her bulgu için** yeniden hesaplanıyordu; 50 MB'lık bir
-   dosyada 1000 bulgu 50 GB disk okuması demekti. Artık dosya başına bir kez.
-3. Dosyanın tamamı ``f.read()`` ile belleğe alınıyordu. Artık akışlı.
+1. ``start_scan_parallel()`` promised parallelism by its name but was a
+   plain ``os.walk`` loop. It is now genuinely multi-process or
+   multi-threaded.
+2. The file hash was recomputed **for every finding**; 1000 findings in
+   a 50 MB file meant 50 GB of disk reads. Now it is computed once per
+   file.
+3. The whole file was pulled into memory with ``f.read()``. Reads are
+   now streamed.
 
-Eski API (``Scanner(target).start_scan_parallel()``) korunmuştur.
+The legacy API (``Scanner(target).start_scan_parallel()``) is preserved.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ __all__ = ["Scanner", "ScanResult", "FileReport", "scan_single_file"]
 # ---------------------------------------------------------------------------
 @dataclass
 class FileReport:
-    """Tek bir dosyanın tarama sonucu (alt süreçten dönen paket)."""
+    """The scan result for one file (the packet returned by a worker)."""
 
     path: str
     findings: list = field(default_factory=list)
@@ -40,13 +43,13 @@ class FileReport:
     skipped: str = ""
     size: int = 0
     sha256: str = "N/A"
-    #: Dosya hiç okunmadı; sonuç artımlı tarama önbelleğinden geldi.
+    #: The file was never read; the result came from the incremental cache.
     cached: bool = False
 
 
 @dataclass
 class ScanResult:
-    """Bir tarama çalıştırmasının tüm çıktısı."""
+    """Everything one scan run produced."""
 
     findings: list = field(default_factory=list)
     files_scanned: int = 0
@@ -58,19 +61,19 @@ class ScanResult:
     started_at: str = ""
     cancelled: bool = False
     quarantined: list = field(default_factory=list)
-    #: Artımlı tarama önbelleğinden gelen (hiç okunmayan) dosya sayısı.
+    #: Number of files served from the incremental cache (never read).
     files_cached: int = 0
-    #: `groups()` belleği. Raporlayıcılar aynı gruplamayı birkaç kez
-    #: istiyor; 200 bin bulguda her çağrıda yeniden gruplamanın anlamı yok.
+    #: Memo for `groups()`. Reporters ask for the same grouping several
+    #: times; regrouping 200k findings on each call makes no sense.
     _groups: tuple | None = field(default=None, repr=False, compare=False)
 
     @property
     def risk_score(self) -> int:
         return risk_score(self.findings)
 
-    # -- çapraz dosya korelasyonu -----------------------------------------
+    # -- cross-file correlation -------------------------------------------
     def groups(self, max_locations: int | None = None) -> list:
-        """Bulguları tekil sırlara indirger (bkz. `sentinel.correlation`)."""
+        """Reduce findings to unique secrets (see `sentinel.correlation`)."""
         from sentinel.correlation import MAX_LOCATIONS, group_findings
 
         limit = MAX_LOCATIONS if max_locations is None else max_locations
@@ -83,11 +86,11 @@ class ScanResult:
 
     @property
     def unique_count(self) -> int:
-        """Tekil hassas değer sayısı — kapatılacak gerçek iş kalemi sayısı."""
+        """Unique sensitive values - the real number of items to close."""
         return len(self.groups())
 
     def shared_secrets(self) -> list:
-        """Birden fazla dosyaya kopyalanmış sırlar, en yaygın önce."""
+        """Secrets copied into more than one file, most widespread first."""
         return [group for group in self.groups() if group.shared]
 
     def counts_by_severity(self) -> dict:
@@ -120,8 +123,8 @@ class ScanResult:
             "files_cached": self.files_cached,
             "bytes_scanned": self.bytes_scanned,
             "findings": len(self.findings),
-            # Bulgu sayısı kopyalama alışkanlığını, tekil sır sayısı ise
-            # kapatılacak gerçek iş kalemini ölçer.
+            # The finding count measures copying habits; the unique-secret
+            # count measures the real work to be done.
             "unique_secrets": self.unique_count,
             "shared_secrets": len(self.shared_secrets()),
             "risk_score": self.risk_score,
@@ -137,10 +140,10 @@ class ScanResult:
 
 # ---------------------------------------------------------------------------
 def calculate_file_hash(path: str, block_size: int = 1 << 20) -> str:
-    """Dosyanın SHA-256 parmak izi (adli bilişim delil bütünlüğü için).
+    """The file's SHA-256 fingerprint (for forensic evidence integrity).
 
-    Çağrı başına **bir kez** hesaplanır; sonuç o dosyanın tüm bulgularına
-    kopyalanır.
+    Computed **once** per call; the result is copied onto every finding
+    from that file.
     """
     digest = hashlib.sha256()
     try:
@@ -153,9 +156,10 @@ def calculate_file_hash(path: str, block_size: int = 1 << 20) -> str:
 
 
 def scan_single_file(path: str, config: ScanConfig) -> FileReport:
-    """Tek dosyayı tarar. Süreç havuzunda çalıştığı için modül seviyesinde.
+    """Scan a single file. At module level so it runs in a process pool.
 
-    İstisnalar burada yakalanır: tek bozuk dosya tüm taramayı düşürmemeli.
+    Exceptions are caught here: one corrupt file must not bring the
+    whole scan down.
     """
     from sentinel.extractors import extract
 
@@ -168,10 +172,10 @@ def scan_single_file(path: str, config: ScanConfig) -> FileReport:
         return report
 
     if report.size == 0:
-        report.skipped = "bos-dosya"
+        report.skipped = "empty-file"
         return report
     if report.size > config.max_file_size:
-        report.skipped = f"boyut-limiti ({report.size} bayt)"
+        report.skipped = f"size-limit ({report.size} bytes)"
         return report
 
     report.sha256 = calculate_file_hash(path)
@@ -191,7 +195,7 @@ def scan_single_file(path: str, config: ScanConfig) -> FileReport:
                     seen=seen,
                 )
             )
-    except Exception as exc:  # pragma: no cover - biçime özgü bozulmalar
+    except Exception as exc:  # pragma: no cover - format-specific corruption
         report.error = f"{type(exc).__name__}: {exc}"
 
     if config.yara_enabled:
@@ -205,7 +209,7 @@ _YARA_CACHE: dict = {}
 
 
 def _yara_findings(path: str, config: ScanConfig, file_sha: str) -> list:
-    """YARA motorunu (süreç başına bir kez derleyerek) uygular."""
+    """Apply the YARA engine, compiling once per process."""
     from sentinel.yara_engine import YaraEngine, yara_available
 
     if not yara_available():
@@ -222,9 +226,9 @@ def _yara_findings(path: str, config: ScanConfig, file_sha: str) -> list:
 
 # ---------------------------------------------------------------------------
 class Scanner:
-    """Dizin ağacını yürüyen, paralel tarama yöneticisi.
+    """The parallel scan manager that walks a directory tree.
 
-    Eski imza korunur::
+    The legacy signature is preserved::
 
         Scanner("test_data", use_ocr=True, quarantine_mode=False)
     """
@@ -246,7 +250,7 @@ class Scanner:
         self.target_dir = target_dir
         self._log = log or (lambda message: None)
         self._stop = threading.Event()
-        self.patterns = None  # geriye dönük alan; Matcher içinde yönetiliyor
+        self.patterns = None  # legacy field; managed inside Matcher now
         self.qm = None
         self._baseline: set = set()
 
@@ -263,16 +267,17 @@ class Scanner:
         self._cache = self._open_cache()
 
     def _open_cache(self):
-        """Artımlı tarama önbelleğini açar (kapalıysa `None`)."""
+        """Open the incremental scan cache (`None` when disabled)."""
         if not self.config.incremental:
             return None
         if self.config.quarantine:
-            # Önbellek "bu dosyada sır vardı" kararını tazeliğini
-            # kanıtlamadan devralır; o karar dosyayı SİLEN bir eyleme
-            # dönüşüyorsa bayat kanıtla hareket etmek kabul edilemez.
+            # The cache inherits the verdict "this file held a secret"
+            # without proving it is still fresh; when that verdict turns
+            # into an action that DELETES the file, acting on stale
+            # evidence is not acceptable.
             self._log(
-                "Karantina açık — artımlı önbellek devre dışı bırakıldı "
-                "(veri silen karar bayat kanıta dayanamaz)."
+                "Quarantine is on - the incremental cache is disabled "
+                "(a decision that deletes data cannot rest on stale evidence)."
             )
             return None
 
@@ -281,12 +286,12 @@ class Scanner:
         cache = ScanCache.open(self.config.cache_path or DEFAULT_CACHE_NAME, self.config)
         if cache.invalidated:
             self._log(
-                "Yapılandırma ya da kural kataloğu değişmiş — önbellek "
-                "tamamen geçersiz, tam tarama yapılıyor."
+                "Configuration or rule catalogue changed - the cache is "
+                "entirely invalid, running a full scan."
             )
         return cache
 
-    # -- eski API ---------------------------------------------------------
+    # -- legacy API -------------------------------------------------------
     @property
     def use_ocr(self) -> bool:
         return self.config.ocr
@@ -300,11 +305,11 @@ class Scanner:
         return self._stop.is_set()
 
     def stop_scan(self):
-        """Dışarıdan (ör. GUI'deki Durdur düğmesi) taramayı iptal eder."""
+        """Cancel the scan from outside (for example the GUI Stop button)."""
         self._stop.set()
 
     def scan_file(self, filepath: str) -> list:
-        """Tek dosyayı tarar ve bulgu listesi döndürür."""
+        """Scan one file and return a list of findings."""
         report = scan_single_file(filepath, self.config)
         findings = self._filter(report.findings)
         if findings and self.config.quarantine:
@@ -312,20 +317,20 @@ class Scanner:
         return findings
 
     def scan_file_wrapper(self, filepath: str) -> list:
-        """`monitor.py`'nin beklediği ad.
+        """The name `monitor.py` expects.
 
-        v3.0'da bu metot hiç tanımlanmamıştı, bu yüzden gerçek zamanlı
-        izleme her olayda ``AttributeError`` veriyordu.
+        In v3.0 this method was never defined, so real-time monitoring
+        raised ``AttributeError`` on every event.
         """
         return self.scan_file(filepath)
 
     def start_scan_parallel(self) -> list:
-        """Eski API: bulguları sözlük listesi olarak döndürür."""
+        """Legacy API: return findings as a list of dicts."""
         return [finding.to_row() for finding in self.scan().findings]
 
-    # -- ana akış ---------------------------------------------------------
+    # -- main flow --------------------------------------------------------
     def iter_targets(self):
-        """Taranacak dosya yollarını üretir."""
+        """Yield the file paths to scan."""
         target = self.config.target
         if os.path.isfile(target):
             yield target
@@ -334,9 +339,9 @@ class Scanner:
         extensions = set(self.config.extensions)
         excluded = set(self.config.exclude_dirs)
         allowlist = self.config.allowlist
-        # Kendi önbellek dosyamızı taramak anlamsız: içinde maskelenmiş
-        # değerler ve parmak izleri var, bunlar entropi kuralını gereksiz
-        # yere tetikler ve rapor kendi kendini raporlar.
+        # Scanning our own cache file is pointless: it holds masked
+        # values and fingerprints that trigger the entropy rule for no
+        # reason, and the report ends up reporting itself.
         own_cache = (
             os.path.abspath(self._cache.path) if self._cache is not None else None
         )
@@ -372,10 +377,10 @@ class Scanner:
                 yield path
 
     def scan(self, progress=None) -> ScanResult:
-        """Taramayı çalıştırır.
+        """Run the scan.
 
-        `progress` verilirse her dosya sonrası
-        ``progress(done, total, path)`` ile çağrılır.
+        When `progress` is given it is called after each file as
+        ``progress(done, total, path)``.
         """
         started = time.monotonic()
         result = ScanResult(
@@ -384,11 +389,11 @@ class Scanner:
         )
 
         if not os.path.exists(self.config.target):
-            raise FileNotFoundError(f"Hedef bulunamadı: {self.config.target}")
+            raise FileNotFoundError(f"Target not found: {self.config.target}")
 
         paths = list(self.iter_targets())
         total = len(paths)
-        self._log(f"{total} dosya kuyruğa alındı.")
+        self._log(f"{total} files queued.")
 
         for index, report in enumerate(self._run(paths), 1):
             self._collect(report, result)
@@ -402,18 +407,18 @@ class Scanner:
         if self._cache is not None:
             self._cache.save()
             self._log(
-                f"Önbellek: {self._cache.stats.hits} dosya atlandı, "
-                f"{self._cache.stats.stale} dosya değişmiş, "
-                f"{self._cache.stats.misses} dosya yeni."
+                f"Cache: {self._cache.stats.hits} files skipped, "
+                f"{self._cache.stats.stale} changed, "
+                f"{self._cache.stats.misses} new."
             )
 
         self._audit(result)
         self._notify(result)
         return result
 
-    # -- yürütme stratejisi ----------------------------------------------
+    # -- execution strategy ------------------------------------------------
     def _run(self, paths):
-        """Önce önbellekten karşılananları, sonra taze taramaları verir."""
+        """Yield cache hits first, then freshly scanned files."""
         if self._cache is None:
             yield from self._execute(paths)
             return
@@ -453,9 +458,10 @@ class Scanner:
 
             yield from self._run_pool(ProcessPoolExecutor, paths)
         except (OSError, RuntimeError, ImportError) as exc:
-            # Kısıtlı ortamlarda (konteyner, /dev/shm yok, frozen exe)
-            # süreç havuzu kurulamaz; sessizce iş parçacıklarına düş.
-            self._log(f"Süreç havuzu kullanılamadı ({exc}); iş parçacığına geçiliyor.")
+            # In restricted environments (containers without /dev/shm, a
+            # frozen exe) a process pool cannot be created; fall back to
+            # threads quietly.
+            self._log(f"Process pool unavailable ({exc}); switching to threads.")
             from concurrent.futures import ThreadPoolExecutor
 
             yield from self._run_pool(ThreadPoolExecutor, paths)
@@ -479,8 +485,9 @@ class Scanner:
         from concurrent.futures import FIRST_COMPLETED, wait
 
         workers = self.config.worker_count()
-        # Havuzu tüm listeyle doldurmak yerine pencere kullan: 1 milyon
-        # dosyalık bir hedefte bellek patlamasın ve iptal hızlı olsun.
+        # Submit through a window instead of filling the pool with the
+        # whole list: memory stays bounded on a million-file target and
+        # cancellation stays responsive.
         window = workers * 4
         iterator = iter(paths)
         pending = set()
@@ -510,9 +517,9 @@ class Scanner:
         try:
             return future.result()
         except Exception as exc:  # pragma: no cover
-            return FileReport(path="<bilinmiyor>", error=f"{type(exc).__name__}: {exc}")
+            return FileReport(path="<unknown>", error=f"{type(exc).__name__}: {exc}")
 
-    # -- sonuç toplama ----------------------------------------------------
+    # -- result collection -------------------------------------------------
     def _collect(self, report: FileReport, result: ScanResult):
         if report.error:
             result.errors.append({"file": report.path, "error": report.error})
@@ -532,7 +539,7 @@ class Scanner:
         result.findings.extend(findings)
         highest = max(f.severity_enum for f in findings)
         self._log(
-            f"[{highest.value.upper()}] {report.path}: {len(findings)} bulgu"
+            f"[{highest.value.upper()}] {report.path}: {len(findings)} findings"
         )
 
         if self.config.quarantine:
@@ -541,7 +548,7 @@ class Scanner:
                 result.quarantined.append(report.path)
 
     def _filter(self, findings) -> list:
-        """Baz çizgisi ve minimum önem derecesi süzgeci."""
+        """Baseline and minimum-severity filter."""
         minimum = self.config.min_severity_enum
         output = []
         for finding in findings:
@@ -553,7 +560,7 @@ class Scanner:
         return output
 
     def _quarantine(self, path: str, findings) -> bool:
-        """Eşik üstü bulgu varsa dosyayı karantinaya alır."""
+        """Quarantine the file when a finding is at or above the threshold."""
         if self.qm is None:
             return False
         threshold = Severity.parse(self.config.quarantine_min_severity)
@@ -566,15 +573,15 @@ class Scanner:
                 path, shred=self.config.shred_original
             )
         except Exception as exc:
-            self._log(f"[KARANTİNA HATASI] {path}: {exc}")
+            self._log(f"[QUARANTINE ERROR] {path}: {exc}")
             return False
         if success:
-            self._log(f"[KARANTİNA] {path} şifrelenip izole edildi.")
+            self._log(f"[QUARANTINE] {path} encrypted and isolated.")
         else:
-            self._log(f"[KARANTİNA HATASI] {path}: {message}")
+            self._log(f"[QUARANTINE ERROR] {path}: {message}")
         return bool(success)
 
-    # -- yan etkiler ------------------------------------------------------
+    # -- side effects -------------------------------------------------------
     def _audit(self, result: ScanResult):
         if not self.config.audit_log:
             return
@@ -588,7 +595,7 @@ class Scanner:
             with open(path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(result.summary(), ensure_ascii=False) + "\n")
         except OSError as exc:
-            self._log(f"Denetim izi yazılamadı: {exc}")
+            self._log(f"Could not write the audit trail: {exc}")
 
     def _notify(self, result: ScanResult):
         if not self.config.webhook_url or not result.findings:
@@ -597,5 +604,5 @@ class Scanner:
 
         try:
             notify_findings(result, self.config)
-        except Exception as exc:  # bildirim hatası taramayı düşürmez
-            self._log(f"Webhook gönderilemedi: {exc}")
+        except Exception as exc:  # a notification failure never fails the scan
+            self._log(f"Could not send the webhook: {exc}")

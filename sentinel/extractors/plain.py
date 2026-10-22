@@ -1,9 +1,9 @@
-"""Düz metin / kaynak kod çıkarıcısı.
+"""Plain text and source code extractor.
 
-Dosyanın tamamını belleğe almak yerine parça parça okur: 2 GB'lık bir log
-dosyası 8 MB bellekle taranabilir. Kodlama tespiti kademelidir
-(UTF-8 → UTF-16 BOM → cp1254 → latin-1), çünkü Türkçe dosyalar sıkça
-Windows-1254 ile kodlanmıştır.
+Reads in chunks rather than pulling the whole file into memory: a 2 GB
+log file can be scanned in 8 MB of RAM. Encoding detection is layered
+(UTF-8 -> UTF-16 BOM -> cp1254 -> latin-1), because Turkish files are
+frequently encoded in Windows-1254.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ EXTENSIONS = frozenset(
 
 _ENCODINGS = ("utf-8", "utf-8-sig", "cp1254", "latin-1")
 
-#: Metin sanıp açtığımız dosya aslında binary ise bu kadar NUL yeter.
+#: This many bytes are enough to spot a NUL in a supposedly text file.
 _BINARY_SNIFF_BYTES = 8192
 
 
 def looks_binary(path: str) -> bool:
-    """Dosya binary mi? NUL baytı en güvenilir ve en hızlı göstergedir."""
+    """Is the file binary? A NUL byte is the fastest reliable signal."""
     try:
         with open(path, "rb") as handle:
             sample = handle.read(_BINARY_SNIFF_BYTES)
@@ -39,12 +39,12 @@ def looks_binary(path: str) -> bool:
     if not sample:
         return False
     if sample.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return False  # UTF-16 BOM: metin
+        return False  # UTF-16 BOM: it is text
     return b"\x00" in sample
 
 
 def _open_text(path: str):
-    """Dosyayı doğru kodlamayla açar."""
+    """Open the file with the right encoding."""
     with open(path, "rb") as handle:
         prefix = handle.read(4)
 
@@ -68,13 +68,13 @@ def _open_text(path: str):
             handle.close()
             raise
 
-    # Hiçbiri tutmadıysa bozuk karakterleri değiştirerek oku; dosyayı
-    # sessizce atlamak, içindeki sırrı kaçırmak anlamına gelir.
+    # If none worked, read with replacement characters: silently
+    # skipping the file would mean missing the secret inside it.
     return open(path, encoding="utf-8", errors="replace", newline="")
 
 
 def extract(path: str, config):
-    """Dosyayı `config.chunk_lines` satırlık parçalar hâlinde üretir."""
+    """Yield the file in chunks of `config.chunk_lines` lines."""
     if looks_binary(path):
         return
 
@@ -103,9 +103,10 @@ def extract(path: str, config):
 
 
 def extract_bytes(data: bytes, source: str, config, real_path: str = ""):
-    """Bellekteki baytları metne çevirip tek parça olarak üretir.
+    """Decode in-memory bytes to text and yield them as one chunk.
 
-    Arşiv üyeleri için kullanılır: küçük üyeleri diske yazmadan tararız.
+    Used for archive members: small members are scanned without being
+    written to disk.
     """
     if b"\x00" in data[:_BINARY_SNIFF_BYTES]:
         return

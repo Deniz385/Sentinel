@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sentinel-dlp"
 version = "4.0.0"
-description = "Hassas veri keşif ve sızıntı önleme (DLP) aracı — KVKK/GDPR/PCI-DSS"
+description = "Sensitive data discovery and loss prevention (DLP) - KVKK/GDPR/PCI-DSS"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -26,9 +26,9 @@ classifiers = [
     "Natural Language :: Turkish",
 ]
 
-# Çekirdek bağımlılıklar kasıtlı olarak azdır: bir güvenlik aracının
-# bağımlılık ağacı kendi saldırı yüzeyidir. Biçim okuyucuları ve GUI
-# isteğe bağlı eklentilerdedir.
+# Core dependencies are deliberately few: a security tool's dependency
+# tree is part of its own attack surface. Format readers and the GUI
+# live in optional extras.
 dependencies = [
     "PyYAML>=6.0",
     "Jinja2>=3.1",
@@ -78,23 +78,23 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
 ignore = [
-    "E501",    # satır uzunluğu — formatter'a bırakıldı
-    "B008",    # argüman varsayılanında çağrı (dataclass field ile çakışır)
-    "SIM105",  # contextlib.suppress — açık try/except daha okunur
+    "E501",    # line length - left to the formatter
+    "B008",    # call in an argument default (clashes with dataclass field)
+    "SIM105",  # contextlib.suppress - an explicit try/except reads better
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# sys.path ayarı importlardan önce gelmek zorunda.
+# The sys.path adjustment has to come before the imports.
 "tests/*" = ["E402"]
 "main.py" = ["E402"]
 "restore_tool.py" = ["E402", "SIM102"]
-# GUI importları, customtkinter varlık denetiminden sonra gelmeli;
-# yoksa bağımlılık eksikken ham ImportError ile çöker.
+# GUI imports must come after the customtkinter availability check,
+# otherwise a missing dependency crashes with a raw ImportError.
 "gui_app.py" = ["E402", "SIM102"]
-# `_open_text` kasıtlı olarak açık bir tanıtıcı döndürür: akışlı okuma
-# için gereklidir, kapatma çağıranın `finally` blokundadır.
+# `_open_text` deliberately returns an open handle: streaming reads
+# need it, and closing happens in the caller's `finally` block.
 "sentinel/extractors/plain.py" = ["SIM115"]
-# İç içe `if`ler burada ayrı gerekçeleri yorumlarıyla taşıyor; tek
-# satıra toplamak okunurluğu düşürür.
+# The nested `if`s here each carry their own reason in a comment;
+# collapsing them into one line would hurt readability.
 "sentinel/allowlist.py" = ["SIM102"]
 "sentinel/matcher.py" = ["SIM102"]

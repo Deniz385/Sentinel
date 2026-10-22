@@ -1,7 +1,7 @@
-"""CLI ve yapılandırma testleri.
+"""CLI and configuration tests.
 
-Çıkış kodları ayrıca sınanır: CI entegrasyonunun tamamı bunlara dayanır,
-v3.0 ise her durumda 0 döndürüyordu.
+Exit codes are tested separately: all CI integration rests on them, and
+v3.0 returned 0 in every case.
 """
 
 from __future__ import annotations
@@ -19,13 +19,13 @@ from tests.conftest import VALID_TCKN, VALID_VISA
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    """İçinde bir sızıntı olan geçici proje; cwd oraya taşınır."""
-    (tmp_path / "musteriler.txt").write_text(
-        f"TC: {VALID_TCKN}\nKart: {VALID_VISA}\n", encoding="utf-8"
+    """A temporary project containing one leak; cwd is moved into it."""
+    (tmp_path / "customers.txt").write_text(
+        f"ID: {VALID_TCKN}\nKart: {VALID_VISA}\n", encoding="utf-8"
     )
-    (tmp_path / "temiz.txt").write_text("hassas veri yok\n", encoding="utf-8")
+    (tmp_path / "clean.txt").write_text("no sensitive data here\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    # Kasa anahtarı ev dizinine yazılmasın.
+    # Keep the vault key out of the home directory.
     monkeypatch.setenv("SENTINEL_HOME", str(tmp_path / ".sentinel"))
     return tmp_path
 
@@ -55,27 +55,27 @@ def _required_args(command):
 # ---------------------------------------------------------------------------
 class TestScanCommand:
     def test_clean_target_exits_zero(self, project, capsys):
-        code = main(["scan", "temiz.txt", "--no-report"])
+        code = main(["scan", "clean.txt", "--no-report"])
         assert code == EXIT_OK
-        assert "TEMİZ" in capsys.readouterr().out
+        assert "CLEAN" in capsys.readouterr().out
 
     def test_findings_alone_do_not_fail(self, project):
-        """--fail-on verilmedikçe bulgu varlığı hata değildir."""
+        """Without --fail-on, having findings is not an error."""
         assert main(["scan", ".", "--no-report", "--quiet"]) == EXIT_OK
 
     def test_fail_on_blocks(self, project, capsys):
         code = main(["scan", ".", "--no-report", "--fail-on", "high"])
         assert code == EXIT_FINDINGS
-        assert "KAPI KAPALI" in capsys.readouterr().out
+        assert "GATE CLOSED" in capsys.readouterr().out
 
     def test_fail_on_below_threshold_passes(self, project):
-        code = main(["scan", "temiz.txt", "--no-report", "--fail-on", "low"])
+        code = main(["scan", "clean.txt", "--no-report", "--fail-on", "low"])
         assert code == EXIT_OK
 
     def test_missing_target_exits_error(self, project, capsys):
         code = main(["scan", "yok-boyle-bir-sey", "--no-report"])
         assert code == EXIT_ERROR
-        assert "HATA" in capsys.readouterr().err
+        assert "ERROR" in capsys.readouterr().err
 
     def test_invalid_severity_exits_error(self, project, capsys):
         code = main(["scan", ".", "--no-report", "--min-severity", "cok-yuksek"])
@@ -107,21 +107,21 @@ class TestScanCommand:
 
     def test_only_filters_rules(self, project):
         out = project / "r"
-        main(["scan", ".", "--only", "TC_KIMLIK", "--output", str(out),
+        main(["scan", ".", "--only", "TR_NATIONAL_ID", "--output", str(out),
               "--format", "json", "--quiet"])
         data = json.loads((out / "scan_results.json").read_text(encoding="utf-8"))
-        assert {item["type"] for item in data["findings"]} == {"TC_KIMLIK"}
+        assert {item["type"] for item in data["findings"]} == {"TR_NATIONAL_ID"}
 
     def test_skip_rules(self, project):
         out = project / "r"
-        main(["scan", ".", "--skip-rules", "KREDI_KARTI", "--output", str(out),
+        main(["scan", ".", "--skip-rules", "CREDIT_CARD", "--output", str(out),
               "--format", "json", "--quiet"])
         data = json.loads((out / "scan_results.json").read_text(encoding="utf-8"))
-        assert "KREDI_KARTI" not in {item["type"] for item in data["findings"]}
+        assert "CREDIT_CARD" not in {item["type"] for item in data["findings"]}
 
     def test_exclude_glob(self, project):
         out = project / "r"
-        main(["scan", ".", "--exclude", "musteriler.txt", "--output", str(out),
+        main(["scan", ".", "--exclude", "customers.txt", "--output", str(out),
               "--format", "json", "--quiet"])
         data = json.loads((out / "scan_results.json").read_text(encoding="utf-8"))
         assert data["findings"] == []
@@ -134,7 +134,7 @@ class TestScanCommand:
 
         code = main(["scan", ".", "--no-report", "--baseline", str(baseline),
                      "--fail-on", "critical"])
-        assert code == EXIT_OK  # bilinen bulgular bastırıldı
+        assert code == EXIT_OK  # known findings were suppressed
 
     def test_audit_log(self, project):
         audit = project / "logs" / "audit.jsonl"
@@ -144,7 +144,7 @@ class TestScanCommand:
 
     def test_verbose_lists_findings(self, project, capsys):
         main(["scan", ".", "--no-report", "--verbose"])
-        assert "TC_KIMLIK" in capsys.readouterr().out
+        assert "TR_NATIONAL_ID" in capsys.readouterr().out
 
     def test_quiet_suppresses_banner(self, project, capsys):
         main(["scan", ".", "--no-report", "--quiet"])
@@ -157,7 +157,7 @@ class TestScanCommand:
         assert VALID_VISA not in output
 
     def test_legacy_target_option(self, project):
-        assert main(["scan", "--target", "temiz.txt", "--no-report"]) == EXIT_OK
+        assert main(["scan", "--target", "clean.txt", "--no-report"]) == EXIT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -165,14 +165,14 @@ class TestRulesCommand:
     def test_lists_rules(self, capsys):
         assert main(["rules"]) == EXIT_OK
         out = capsys.readouterr().out
-        assert "TC_KIMLIK" in out
-        assert "tespit kuralı" in out
+        assert "TR_NATIONAL_ID" in out
+        assert "detection rules" in out
 
     def test_tag_filter(self, capsys):
         main(["rules", "--tag", "secret"])
         out = capsys.readouterr().out
         assert "AWS_ACCESS_KEY" in out
-        assert "TC_KIMLIK" not in out
+        assert "TR_NATIONAL_ID" not in out
 
     def test_json_output(self, capsys):
         main(["rules", "--json"])
@@ -207,14 +207,14 @@ class TestDoctorCommand:
         assert main(["doctor"]) == EXIT_OK
         out = capsys.readouterr().out
         assert "Python" in out
-        assert "karantina" in out.lower()
+        assert "quarantine" in out.lower()
 
 
 class TestVaultCommand:
     def test_empty_vault(self, project, capsys):
         code = main(["vault", "list", "--dir", str(project / "kasa")])
         assert code == EXIT_OK
-        assert "boş" in capsys.readouterr().out
+        assert "empty" in capsys.readouterr().out
 
     def test_purge_requires_a_target(self, project, capsys):
         code = main(["vault", "purge", "--dir", str(project / "kasa")])
@@ -233,11 +233,11 @@ class TestVaultCommand:
             "SENTINEL_VAULT_KEY", base64.b64encode(os.urandom(32)).decode("ascii")
         )
         vault_dir = project / "kasa"
-        main(["scan", "musteriler.txt", "--no-report", "--quiet", "--quarantine"])
-        # Varsayılan kasa dizini KARANTINA_BOLGESI.
+        main(["scan", "customers.txt", "--no-report", "--quiet", "--quarantine"])
+        # The default vault directory is KARANTINA_BOLGESI.
         code = main(["vault", "list"])
         assert code == EXIT_OK
-        assert not (project / "musteriler.txt").exists()
+        assert not (project / "customers.txt").exists()
         assert ".enc" in capsys.readouterr().out
         del vault_dir
 
@@ -274,11 +274,11 @@ class TestPrecommitCommand:
         except (OSError, subprocess.CalledProcessError):
             pytest.skip("git yok")
 
-        git("add", "musteriler.txt")
+        git("add", "customers.txt")
         code = main(["precommit", "--fail-on", "high"])
         assert code == EXIT_FINDINGS
         out = capsys.readouterr().out
-        assert "COMMIT ENGELLENDİ" in out
+        assert "COMMIT BLOCKED" in out
         assert VALID_TCKN not in out
 
     def test_allows_clean_staged_files(self, project, capsys):
@@ -295,7 +295,7 @@ class TestPrecommitCommand:
         except (OSError, subprocess.CalledProcessError):
             pytest.skip("git yok")
 
-        git("add", "temiz.txt")
+        git("add", "clean.txt")
         assert main(["precommit", "--fail-on", "high"]) == EXIT_OK
 
 
@@ -312,8 +312,8 @@ class TestConfig:
         assert config.extensions == (".txt", ".pdf")
 
     def test_rejects_unknown_keys(self):
-        with pytest.raises(ValueError, match="Bilinmeyen yapılandırma"):
-            ScanConfig.from_dict({"hedef": "."})
+        with pytest.raises(ValueError, match="Unknown configuration key"):
+            ScanConfig.from_dict({"unknown_key": "."})
 
     def test_rejects_bad_severity(self):
         with pytest.raises(ValueError):
@@ -327,7 +327,7 @@ class TestConfig:
         path.write_text(
             yaml.safe_dump(
                 {
-                    "target": "veri",
+                    "target": "data",
                     "min_severity": "high",
                     "workers": 3,
                     "allowlist": {"paths": ["tests/**"], "rules": ["PRIVATE_IP"]},
@@ -336,7 +336,7 @@ class TestConfig:
             encoding="utf-8",
         )
         config = ScanConfig.from_file(str(path))
-        assert config.target == "veri"
+        assert config.target == "data"
         assert config.min_severity == "high"
         assert config.workers == 3
         assert config.allowlist.allows_path("tests/x.txt")
@@ -357,7 +357,7 @@ class TestConfig:
         assert config.min_severity == "high"
 
     def test_env_overrides(self):
-        """Sırlar koda ya da yapılandırma dosyasına değil, ortama yazılır."""
+        """Secrets live in the environment, not in code or a config file."""
         config = ScanConfig().with_env(
             {
                 "SENTINEL_WEBHOOK_URL": "https://example.invalid/hook",
@@ -379,7 +379,7 @@ class TestConfig:
 
     def test_cli_overrides_file(self, tmp_path, monkeypatch):
         (tmp_path / "sentinel.yml").write_text("min_severity: info\n", encoding="utf-8")
-        (tmp_path / "a.txt").write_text("mail: a@adu.edu.tr\n", encoding="utf-8")
+        (tmp_path / "a.txt").write_text("mail: a@university.edu\n", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
 
         out = tmp_path / "r"
@@ -401,15 +401,18 @@ class TestConfig:
 
 
 class TestOutputEncoding:
-    """Çıktı kodlaması, Windows'ta aracı tamamen kullanılamaz kılmıştı.
+    """Output encoding once made the tool unusable on Windows.
 
-    Çıktı bir dosyaya ya da boruya yönlendirildiğinde Python, Windows'ta
-    sistemin eski kod sayfasını (cp1252) kullanır; o sayfada ``ş`` yoktur
-    ve ilk Türkçe karakterde ``UnicodeEncodeError`` fırlar. Yani
-    `sentinel doctor > rapor.txt` ya da herhangi bir CI adımı çöküyordu.
+    When output is redirected to a file or a pipe, Python on Windows
+    uses the system's legacy code page (cp1252). The status glyphs this
+    CLI prints - ``✓``, ``✗`` and the severity icons ``■ ◆ △`` - have no
+    cp1252 representation, so the first one raised
+    ``UnicodeEncodeError``: `sentinel doctor > report.txt`, and every CI
+    step, crashed.
 
-    Bu testler alt süreçte gerçek bir yönlendirme kurar ve ortam
-    kodlamasını cp1252'ye zorlar, böylece hata her platformda üretilebilir.
+    These tests build a real redirection in a subprocess and force the
+    environment encoding to cp1252, so the fault can be reproduced on
+    any platform.
     """
 
     ENV = {"PYTHONIOENCODING": "cp1252"}
@@ -423,7 +426,7 @@ class TestOutputEncoding:
             [sys.executable, "-m", "sentinel.cli", *args],
             cwd=project,
             env=env,
-            capture_output=True,  # gerçek boru: konsol yazıcısı devrede değil
+            capture_output=True,  # a real pipe: the console writer is not in play
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -436,28 +439,34 @@ class TestOutputEncoding:
             ("doctor",),
             ("rules",),
             ("rules", "--json"),
-            ("scan", "musteriler.txt", "--no-report"),
+            ("scan", "customers.txt", "--no-report"),
             ("vault", "list"),
         ],
     )
     def test_commands_survive_a_legacy_codepage(self, project, args):
         result = self._run(project, *args)
         assert result.returncode == EXIT_OK, (
-            f"{' '.join(args)} cp1252 boru hattında düştü:\n"
+            f"{' '.join(args)} failed in a cp1252 pipeline:\n"
             f"{result.stdout}\n{result.stderr}"
         )
         assert "charmap" not in result.stdout + result.stderr
         assert "UnicodeEncodeError" not in result.stdout + result.stderr
 
-    def test_turkish_characters_are_not_mangled(self, project):
-        """Çökmemek yetmez: metin de okunabilir kalmalı."""
-        result = self._run(project, "doctor")
-        assert "Şifreli karantina" in result.stdout
-        assert "Gerçek zamanlı izleme" in result.stdout
+    def test_status_glyphs_survive_readably(self, project):
+        """Not crashing is not enough: the text must stay readable.
 
-    def test_report_paths_with_turkish_names(self, project, tmp_path):
-        """Türkçe adlı bir dizine rapor yazmak da çökmemeli."""
-        out = tmp_path / "çıktı raporları"
+        The glyphs below are exactly the ones cp1252 cannot encode, so
+        finding them intact proves the stream was reconfigured to UTF-8
+        rather than silently stripped.
+        """
+        result = self._run(project, "doctor")
+        assert "Encrypted quarantine" in result.stdout
+        assert "Real-time monitoring" in result.stdout
+        assert "✓" in result.stdout or "○" in result.stdout
+
+    def test_report_paths_with_non_ascii_names(self, project, tmp_path):
+        """Writing reports into a non-ASCII directory must not crash either."""
+        out = tmp_path / "rapports générés"
         result = self._run(
             project, "scan", ".", "--output", str(out), "--format", "csv,json", "--quiet"
         )

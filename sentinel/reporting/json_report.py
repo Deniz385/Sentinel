@@ -1,7 +1,7 @@
-"""JSON raporu — makine tüketimi için.
+"""JSON report, for machine consumption.
 
-Özet + bulgular tek belgede; SIEM'e aktarmak, baz çizgisi üretmek ya da
-iki taramayı karşılaştırmak (regresyon kontrolü) için kullanılır.
+Summary and findings in one document; used to feed a SIEM, to produce a
+baseline, or to diff two scans as a regression check.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ def to_dict(result) -> dict:
         "quarantined": list(result.quarantined),
         "errors": result.errors,
         "findings": [finding.to_dict() for finding in result.findings],
-        # Tekil sırlar: aynı değerin tüm kopyaları tek kayıtta. SIEM'de
-        # "40 uyarı" yerine "1 anahtar, 40 konum" olarak görünür.
+        # Unique secrets: every copy of one value in a single record. In
+        # a SIEM this reads as "1 key, 40 locations" rather than "40 alerts".
         "secrets": [group.to_dict() for group in result.groups()],
     }
 

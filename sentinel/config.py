@@ -1,9 +1,10 @@
-"""Katmanlı yapılandırma: varsayılan < dosya (`sentinel.yml`) < ortam < CLI.
+"""Layered configuration: defaults < file (`sentinel.yml`) < env < CLI.
 
-Eski sürümde webhook adresi kaynak kodda sabit, Tesseract yolu sabit,
-dosya boyutu limiti kodun içine gömülüydü. Buradaki `ScanConfig` tüm bu
-kararları tek ve test edilebilir bir yere toplar; ayrıca alt süreçlere
-gönderilebilmesi için tamamen picklable tutulur (çağrılabilir alan yok).
+In the previous version the webhook address was hard-coded, the
+Tesseract path was hard-coded and the file-size limit was buried in the
+code. `ScanConfig` collects all of those decisions in one testable
+place, and is kept fully picklable (no callable fields) so it can be
+sent to worker processes.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ __all__ = ["ScanConfig", "DEFAULT_CONFIG_NAMES", "CONFIG_TEMPLATE"]
 
 DEFAULT_CONFIG_NAMES = ("sentinel.yml", "sentinel.yaml", ".sentinel.yml")
 
-#: Taranacak uzantılar. Uzantısı listede olmayan dosyalara hiç dokunulmaz.
+#: Extensions to scan. Files whose extension is not listed are skipped.
 DEFAULT_EXTENSIONS = (
     ".txt", ".csv", ".tsv", ".log", ".md", ".rst", ".ini", ".cfg", ".conf",
     ".env", ".json", ".yml", ".yaml", ".xml", ".toml", ".sql", ".properties",
@@ -27,13 +28,13 @@ DEFAULT_EXTENSIONS = (
     ".pdf", ".docx", ".xlsx", ".xlsm", ".pptx",
     ".zip",
     ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp",
-    # Uzantısız dosyalar: `id_rsa`, `credentials`, `Dockerfile`, `.npmrc`
-    # gibi yüksek değerli hedefler burada yaşar. Binary olanlar
-    # çıkarıcıdaki NUL denetimiyle zaten anında elenir.
+    # Extensionless files: high-value targets such as `id_rsa`,
+    # `credentials`, `Dockerfile` and `.npmrc` live here. Binary ones are
+    # rejected immediately by the NUL check in the extractor.
     "",
 )
 
-#: Hiç girilmeyecek dizinler (zaman kaybı ve gürültü kaynağı).
+#: Directories never descended into (a waste of time and a noise source).
 DEFAULT_EXCLUDE_DIRS = (
     ".git", ".hg", ".svn", "__pycache__", ".mypy_cache", ".pytest_cache",
     ".ruff_cache", "node_modules", "venv", ".venv", "env", "dist", "build",
@@ -45,27 +46,27 @@ DEFAULT_EXCLUDE_DIRS = (
 
 @dataclass
 class ScanConfig:
-    """Bir tarama çalıştırmasının tüm ayarları."""
+    """Every setting for one scan run."""
 
-    # --- hedef ve kapsam ---
+    # --- target and scope ---
     target: str = "."
     extensions: tuple[str, ...] = DEFAULT_EXTENSIONS
     exclude_dirs: tuple[str, ...] = DEFAULT_EXCLUDE_DIRS
     exclude_globs: tuple[str, ...] = ()
     follow_symlinks: bool = False
     max_file_size: int = 100 * 1024 * 1024  # 100 MB
-    #: Metin dosyaları akışlı okunur; tek seferde bellekte tutulan satır sayısı.
+    #: Text files are read in a stream; lines held in memory at once.
     chunk_lines: int = 5000
     max_line_length: int = 8192
 
-    # --- desen seçimi ---
+    # --- pattern selection ---
     include_rules: tuple[str, ...] = ()
     exclude_rules: tuple[str, ...] = ()
     min_severity: str = Severity.INFO.value
     entropy_scan: bool = True
     entropy_threshold: float = 4.2
 
-    # --- arşiv güvenliği (zip bomb koruması) ---
+    # --- archive safety (zip-bomb protection) ---
     archive_enabled: bool = True
     archive_max_depth: int = 3
     archive_max_members: int = 2000
@@ -83,43 +84,43 @@ class ScanConfig:
     yara_enabled: bool = True
     yara_rules_dir: str = "rules"
 
-    # --- çalıştırma ---
-    workers: int = 0  # 0 = otomatik
+    # --- execution ---
+    workers: int = 0  # 0 = automatic
     executor: str = "auto"  # auto | process | thread | serial
 
-    # --- eylemler ---
+    # --- actions ---
     quarantine: bool = False
     quarantine_dir: str = "KARANTINA_BOLGESI"
     quarantine_min_severity: str = Severity.HIGH.value
     shred_original: bool = False
 
-    # --- bildirim ---
+    # --- notification ---
     webhook_url: str = ""
     webhook_min_severity: str = Severity.HIGH.value
     webhook_batch: bool = True
 
-    # --- gizlilik ---
+    # --- privacy ---
     fingerprint_salt: str = ""
     snippet_enabled: bool = True
 
-    # --- yanlış pozitif yönetimi ---
+    # --- false-positive management ---
     allowlist: Allowlist = field(default_factory=Allowlist)
     baseline_path: str = ""
 
-    # --- denetim ---
+    # --- audit ---
     audit_log: str = ""
 
-    # --- artımlı tarama ---
-    #: Varsayılan kapalı: bir güvenlik aracı, sorulmadan "bu dosya
-    #: değişmemiş" varsayımına dayanmamalı.
+    # --- incremental scanning ---
+    #: Off by default: a security tool should not rely on the assumption
+    #: "this file has not changed" unless asked to.
     incremental: bool = False
     cache_path: str = ""
 
     # ------------------------------------------------------------------
     def __post_init__(self):
-        # Boş dize "uzantısız dosya" demektir (id_rsa, Dockerfile,
-        # credentials) ve korunmalıdır; önüne nokta eklemek bu dosyaları
-        # tamamen taranamaz hâle getiriyordu.
+        # An empty string means "file with no extension" (id_rsa,
+        # Dockerfile, credentials) and must be preserved; prefixing a dot
+        # made those files impossible to scan at all.
         self.extensions = tuple(
             ""
             if not e
@@ -176,7 +177,7 @@ class ScanConfig:
         unknown = set(data) - known
         if unknown:
             raise ValueError(
-                "Bilinmeyen yapılandırma anahtar(lar)ı: " + ", ".join(sorted(unknown))
+                "Unknown configuration key(s): " + ", ".join(sorted(unknown))
             )
         if "allowlist" in data:
             data["allowlist"] = Allowlist.from_dict(data["allowlist"])
@@ -184,7 +185,7 @@ class ScanConfig:
 
     @classmethod
     def from_file(cls, path: str) -> ScanConfig:
-        """YAML veya JSON yapılandırma dosyası okur."""
+        """Read a YAML or JSON configuration file."""
         import json
 
         with open(path, encoding="utf-8") as handle:
@@ -196,19 +197,19 @@ class ScanConfig:
                 import yaml
             except ImportError as exc:  # pragma: no cover
                 raise RuntimeError(
-                    "YAML yapılandırması için PyYAML gerekli: pip install pyyaml"
+                    "PyYAML is required for YAML configuration: pip install pyyaml"
                 ) from exc
             data = yaml.safe_load(text) or {}
         else:
             data = json.loads(text or "{}")
 
         if not isinstance(data, dict):
-            raise ValueError(f"Yapılandırma dosyası bir sözlük olmalı: {path}")
+            raise ValueError(f"Configuration file must be a mapping: {path}")
         return cls.from_dict(data)
 
     @classmethod
     def discover(cls, start: str = ".") -> ScanConfig | None:
-        """Çalışma dizininde (ve üst dizinlerinde) yapılandırma arar."""
+        """Look for a configuration file in this directory and its parents."""
         current = os.path.abspath(start)
         while True:
             for name in DEFAULT_CONFIG_NAMES:
@@ -221,10 +222,10 @@ class ScanConfig:
             current = parent
 
     def with_env(self, environ: dict | None = None) -> ScanConfig:
-        """Ortam değişkenlerini (``SENTINEL_*``) üzerine bindirir.
+        """Overlay environment variables (``SENTINEL_*``).
 
-        Sırlar (webhook adresi, parmak izi tuzu) kaynak kodda ya da
-        yapılandırma dosyasında değil, ortamda durmalıdır.
+        Secrets - the webhook address, the fingerprint salt - belong in
+        the environment, not in source code or a configuration file.
         """
         env = os.environ if environ is None else environ
         overrides: dict = {}
@@ -268,13 +269,13 @@ class ScanConfig:
 
 
 CONFIG_TEMPLATE = """\
-# Sentinel yapılandırması
-# Sırları buraya YAZMAYIN; ortam değişkeni kullanın:
+# Sentinel configuration
+# Do NOT put secrets here; use environment variables:
 #   SENTINEL_WEBHOOK_URL, SENTINEL_FINGERPRINT_SALT
 
 target: .
 
-# Taranacak uzantılar (boş bırakılırsa varsayılan liste kullanılır)
+# Extensions to scan (leave unset to use the built-in list)
 # extensions: [.txt, .csv, .pdf, .docx, .xlsx, .zip, .py, .env]
 
 exclude_dirs:
@@ -290,27 +291,27 @@ exclude_globs:
 # info | low | medium | high | critical
 min_severity: low
 
-# Entropi tabanlı generic sır avı
+# Entropy-based hunting for generic secrets
 entropy_scan: true
 entropy_threshold: 4.2
 
-# Arşiv (ZIP) tarama ve zip-bomb koruması
+# Archive (ZIP) scanning and zip-bomb protection
 archive_enabled: true
 archive_max_depth: 3
 archive_max_members: 2000
 
-# Görsellerde OCR (Tesseract kurulu olmalı)
+# OCR on images (requires Tesseract)
 ocr: false
 ocr_langs: tur+eng
 
-# 0 = CPU sayısına göre otomatik
+# 0 = automatic, based on CPU count
 workers: 0
 
-# Karantina (hassas dosyayı şifreleyip izole eder) — dikkatli kullanın
+# Quarantine encrypts and isolates sensitive files - use with care
 quarantine: false
 quarantine_min_severity: critical
 
-# Yanlış pozitif yönetimi
+# False-positive management
 allowlist:
   paths:
     - "tests/**"
@@ -323,12 +324,13 @@ allowlist:
   use_defaults: true
   inline: true
 
-# Artımlı tarama: değişmemiş dosyaları önbellekten geçer.
-# Kural kataloğu ya da bu dosya değişirse önbellek kendiliğinden düşer.
-# Karantina açıkken hiç kullanılmaz (veri silen karar bayat kanıta dayanamaz).
+# Incremental scanning: skip unchanged files via the cache.
+# The cache drops itself when the rule catalogue or this file changes.
+# It is never used while quarantine is on (a decision that deletes data
+# cannot rest on stale evidence).
 incremental: false
 # cache_path: .sentinel-cache.json
 
-# Denetim izi (JSONL)
+# Audit trail (JSONL)
 # audit_log: logs/audit.jsonl
 """

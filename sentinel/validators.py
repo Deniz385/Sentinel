@@ -1,9 +1,9 @@
-"""Algoritmik doğrulayıcılar.
+"""Algorithmic validators.
 
-Regex "11 haneli sayı" bulur; doğrulayıcı onun gerçekten bir TC Kimlik
-Numarası olup olmadığını söyler. DLP araçlarının kullanılabilirliği
-büyük ölçüde bu katmana bağlıdır: doğrulama olmadan 50 MB'lık bir log
-dosyası binlerce yanlış pozitif üretir.
+A regex finds "an 11-digit number"; a validator says whether it really is
+a Turkish national identity number. How usable a DLP tool is depends
+largely on this layer: without validation a 50 MB log file produces
+thousands of false positives.
 """
 
 from __future__ import annotations
@@ -29,15 +29,15 @@ __all__ = [
 
 
 # --------------------------------------------------------------------------
-# TC Kimlik Numarası
+# Turkish national identity number (TCKN)
 # --------------------------------------------------------------------------
 def validate_tckn(value: str) -> bool:
-    """TC Kimlik Numarası algoritma kontrolü.
+    """Check-digit validation for a Turkish national identity number.
 
-    1. 11 hane, ilk hane 0 olamaz.
-    2. (1,3,5,7,9. hanelerin toplamı × 7 − 2,4,6,8. hanelerin toplamı) mod 10
-       = 10. hane.
-    3. İlk 10 hanenin toplamı mod 10 = 11. hane.
+    1. Eleven digits; the first may not be 0.
+    2. ((sum of digits 1,3,5,7,9) * 7 - (sum of digits 2,4,6,8)) mod 10
+       equals digit 10.
+    3. (sum of the first ten digits) mod 10 equals digit 11.
     """
     value = str(value).strip()
     if len(value) != 11 or not value.isdigit() or value[0] == "0":
@@ -45,13 +45,14 @@ def validate_tckn(value: str) -> bool:
 
     digits = [int(d) for d in value]
 
-    # 11111111110 gibi tüm haneleri aynı olan sayılar algoritmayı geçer ama
-    # gerçek bir kimlik numarası değildir; test verisi gürültüsünü keser.
+    # Numbers whose digits are all identical, such as 11111111110, pass
+    # the algorithm but are not real identity numbers; this cuts the
+    # noise from placeholder test data.
     if len(set(digits[:10])) == 1:
         return False
 
-    odd_sum = sum(digits[0:9:2])  # 1., 3., 5., 7., 9. haneler
-    even_sum = sum(digits[1:8:2])  # 2., 4., 6., 8. haneler
+    odd_sum = sum(digits[0:9:2])  # digits 1, 3, 5, 7, 9
+    even_sum = sum(digits[1:8:2])  # digits 2, 4, 6, 8
 
     check_10 = ((odd_sum * 7) - even_sum) % 10
     check_11 = sum(digits[:10]) % 10
@@ -59,15 +60,15 @@ def validate_tckn(value: str) -> bool:
     return digits[9] == check_10 and digits[10] == check_11
 
 
-# Eski API adı (src/validators.py ile uyumluluk).
+# Legacy API name, kept compatible with the old src/validators.py.
 validate_tc = validate_tckn
 
 
 # --------------------------------------------------------------------------
-# Kredi kartı
+# Credit card
 # --------------------------------------------------------------------------
 def luhn_check(value: str) -> bool:
-    """Luhn (mod 10) kontrol toplamı."""
+    """Luhn (mod 10) checksum."""
     clean = re.sub(r"[ \-]", "", str(value))
     if not clean.isdigit() or not clean:
         return False
@@ -85,8 +86,8 @@ def luhn_check(value: str) -> bool:
     return checksum % 10 == 0
 
 
-# Kart markası ön ekleri (BIN aralıkları). Marka bilgisi raporu
-# anlamlandırır: "Visa" bir ödeme kartıdır, rastgele 16 hane değildir.
+# Card brand prefixes (BIN ranges). The brand gives the report meaning:
+# "Visa" is a payment card, not 16 arbitrary digits.
 _BRANDS = (
     ("Visa", re.compile(r"^4\d{12}(?:\d{3})?(?:\d{3})?$")),
     ("Mastercard", re.compile(r"^(?:5[1-5]\d{14}|2(?:2[2-9]|[3-6]\d|7[01])\d{12}|2720\d{12})$")),
@@ -100,7 +101,7 @@ _BRANDS = (
 
 
 def card_brand(value: str) -> str | None:
-    """Kart numarasının markasını döndürür, bilinmiyorsa ``None``."""
+    """Return the card brand, or ``None`` when it is not recognised."""
     clean = re.sub(r"[ \-]", "", str(value))
     for name, pattern in _BRANDS:
         if pattern.match(clean):
@@ -109,10 +110,10 @@ def card_brand(value: str) -> str | None:
 
 
 def validate_credit_card(value: str) -> bool:
-    """Luhn + uzunluk + bilinen marka ön eki kontrolü.
+    """Luhn, length and a known brand prefix.
 
-    Sadece Luhn yetersizdir: rastgele 16 hanenin ~%10'u Luhn'u geçer.
-    Marka ön eki şartı yanlış pozitifleri belirgin şekilde azaltır.
+    Luhn alone is not enough: roughly 10% of random 16-digit numbers pass
+    it. Requiring a brand prefix cuts false positives markedly.
     """
     clean = re.sub(r"[ \-]", "", str(value))
     if not clean.isdigit() or not 13 <= len(clean) <= 19:
@@ -125,8 +126,8 @@ def validate_credit_card(value: str) -> bool:
 # --------------------------------------------------------------------------
 # IBAN
 # --------------------------------------------------------------------------
-# Ülke bazlı IBAN uzunlukları (ISO 13616). Eksik ülke = bilinmeyen,
-# uzunluk kontrolü atlanır ama mod-97 yine uygulanır.
+# Per-country IBAN lengths (ISO 13616). A missing country means unknown:
+# the length check is skipped, but mod-97 still applies.
 IBAN_LENGTHS = {
     "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16,
     "BG": 22, "BH": 22, "BR": 29, "BY": 28, "CH": 21, "CR": 22, "CY": 28,
@@ -144,7 +145,7 @@ IBAN_LENGTHS = {
 
 
 def validate_iban(iban: str) -> bool:
-    """IBAN doğrulaması (ISO 7064 Mod 97-10)."""
+    """IBAN validation (ISO 7064 mod 97-10)."""
     clean = re.sub(r"[\s\-]", "", str(iban)).upper()
 
     if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{10,30}", clean):
@@ -154,8 +155,8 @@ def validate_iban(iban: str) -> bool:
     if expected is not None and len(clean) != expected:
         return False
 
-    # İlk 4 karakteri sona taşı, harfleri sayıya çevir (A=10 ... Z=35),
-    # sonucun 97'ye bölümünden kalan 1 olmalı.
+    # Move the first four characters to the end, map letters to numbers
+    # (A=10 ... Z=35); the result modulo 97 must be 1.
     rearranged = clean[4:] + clean[:4]
     numeric = "".join(
         char if char.isdigit() else str(ord(char) - 55) for char in rearranged
@@ -167,7 +168,7 @@ def validate_iban(iban: str) -> bool:
 
 
 def validate_tr_iban(iban: str) -> bool:
-    """Sadece TR IBAN kabul eder."""
+    """Accept Turkish IBANs only."""
     clean = re.sub(r"[\s\-]", "", str(iban)).upper()
     return clean.startswith("TR") and validate_iban(clean)
 
@@ -181,10 +182,11 @@ def _b64url_decode(segment: str) -> bytes:
 
 
 def validate_jwt(token: str) -> bool:
-    """Yapısal JWT kontrolü: başlık gerçekten çözülüp ``alg`` içeriyor mu?
+    """Structural JWT check: does the header decode and carry ``alg``?
 
-    İmza doğrulanmaz (anahtar bizde yok); amaç "JWT'ye benzeyen base64
-    çöpü" ile gerçek bir token'ı ayırmak.
+    The signature is not verified (we do not hold the key); the point is
+    to tell a real token apart from base64 noise that merely looks like
+    a JWT.
     """
     parts = str(token).strip().split(".")
     if len(parts) != 3 or not all(parts[:2]):
@@ -211,13 +213,13 @@ def _b58decode(value: str) -> bytes | None:
         number = number * 58 + index
 
     body = number.to_bytes((number.bit_length() + 7) // 8, "big")
-    # Baştaki '1' karakterleri sıfır bayta karşılık gelir.
+    # Leading '1' characters correspond to zero bytes.
     leading_zeros = len(value) - len(value.lstrip("1"))
     return b"\x00" * leading_zeros + body
 
 
 def validate_base58check(address: str) -> bool:
-    """Base58Check (Bitcoin adres) kontrol toplamı doğrulaması."""
+    """Base58Check (Bitcoin address) checksum validation."""
     import hashlib
 
     address = str(address).strip()
@@ -234,7 +236,7 @@ def validate_base58check(address: str) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Hafif doğrulayıcılar
+# Lightweight validators
 # --------------------------------------------------------------------------
 _PLACEHOLDER_EMAIL_RE = re.compile(
     r"(?i)@(example\.(com|org|net)|test|localhost|invalid|domain\.com|email\.com)$"
@@ -242,7 +244,7 @@ _PLACEHOLDER_EMAIL_RE = re.compile(
 
 
 def validate_email(value: str) -> bool:
-    """Belirgin şablon/örnek adresleri eler."""
+    """Reject obvious placeholder and example addresses."""
     value = str(value).strip()
     if "@" not in value or value.count("@") != 1:
         return False
@@ -255,7 +257,7 @@ def validate_email(value: str) -> bool:
 
 
 def validate_phone_tr(value: str) -> bool:
-    """TR GSM numarası: normalize edildiğinde 5XXXXXXXXX olmalı."""
+    """Turkish mobile number: normalises to 5XXXXXXXXX."""
     digits = re.sub(r"\D", "", str(value))
     if digits.startswith("90"):
         digits = digits[2:]
@@ -263,9 +265,9 @@ def validate_phone_tr(value: str) -> bool:
     return len(digits) == 10 and digits.startswith("5")
 
 
-# Desen kataloğunun isimle referans verdiği doğrulayıcı tablosu.
-# Fonksiyon nesnesi yerine isim tutmak, yapılandırmanın (ve alt
-# süreçlere gönderilen `ScanConfig`'in) picklable kalmasını sağlar.
+# Validator table, referenced by name from the pattern catalogue.
+# Holding a name rather than a function object keeps the configuration
+# (and the `ScanConfig` sent to worker processes) picklable.
 VALIDATORS = {
     "tckn": validate_tckn,
     "credit_card": validate_credit_card,
