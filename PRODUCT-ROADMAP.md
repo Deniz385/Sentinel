@@ -481,10 +481,23 @@ artifact in its own right:
 
 27 rules is a demo. A product needs a rule catalogue that is versioned
 and shipped independently of the binary, with provenance and tests per
-rule, and a path for customers to add their own without forking. Turkish
-coverage is the differentiator - deepen it rather than racing GitGuardian
-to 450 generic token formats, a race that cannot be won and does not need
-to be.
+rule, and a path for customers to add their own without forking.
+
+Depth in Turkish coverage is where the remaining advantage is - not its
+existence, which Presidio already matches (8.1), but its breadth.
+Concrete gaps, in order of value:
+
+| Rule | Why | Note |
+|---|---|---|
+| **VKN** (tax number) | 10 digits with its own check digit. Appears in every invoice, contract and accounting export in the country. | **Neither Sentinel nor Presidio has it.** The clearest single gap. |
+| **SGK** registration number | Payroll and HR exports | |
+| **Turkish address and name NER** | The one place Presidio's NLP is genuinely ahead | Depend on Presidio here rather than reimplement |
+| Bank account / branch formats | Pre-IBAN records persist in legacy systems | |
+| E-Devlet and KEP identifiers | Appear in correspondence archives | |
+
+A rule is only finished when it has an entry in the labelled corpus
+from 5.2 and measured precision and recall. Adding rules without that
+is how a detector quietly gets worse.
 
 ### 7.5 Integrations, in blunt priority order
 
@@ -504,20 +517,85 @@ ask.
 
 ### 8.1 The honest competitive position
 
+**Correction.** An earlier revision of this file claimed Turkish PII
+validation as Sentinel's native differentiator against competitors
+marked "No". That was wrong, and it was wrong in the most expensive
+direction - it would have been said to a customer. Microsoft's
+Presidio, MIT licensed and free, ships `TrNationalIdRecognizer` and
+`TrLicensePlateRecognizer`. Verified directly on presidio-analyzer
+2.2.364:
+
+```
+valid TCKN     10000000146 -> [('TR_NATIONAL_ID', 1.0)]
+invalid TCKN   12345678901 -> no match
+plate 34 ABC 1234          -> [('TR_LICENSE_PLATE', 1.0)]
+plate 99 ABC 1234          -> no match        # province 99 does not exist
+```
+
+Checksum-validated TCKN and province-validated plates, correct on both
+the accept and the reject case. Secondary sources claiming Presidio has
+no Turkish recognizer are out of date; the test above is the citable
+evidence. Any positioning built on "only we validate Turkish IDs" is
+built on sand.
+
+#### Commercial competitors
+
 | | Sentinel | GitGuardian | Nightfall | Purview / Forcepoint |
 |---|---|---|---|---|
 | Focus | Filesystem PII + secrets | Secrets in git | SaaS DLP | Enterprise DLP suite |
-| Turkish PII validation | **Native** | No | No | Generic |
 | On-prem / air-gapped | **Yes** | Limited | No | Yes |
 | Price point | Low | Mid | Mid | High |
 | Maturity | Early | Mature | Mature | Mature |
 
-Sentinel does not win on breadth, maturity or brand, and will not. It
-wins, if at all, on three things at once: **Turkish PII is validated
-algorithmically rather than regex-guessed; it runs entirely inside the
-customer's perimeter; and it costs a fraction of the incumbents.** Every
-positioning decision should protect those three and concede the rest
-without embarrassment.
+#### Open-source competitors - the ones that matter more
+
+| Project | Licence | Shape | Turkish PII | Overlap |
+|---|---|---|---|---|
+| **Presidio** (Microsoft) | MIT | Library | **Yes** - TCKN + plate, checksum validated | The PII engine, entirely |
+| **TruffleHog** | AGPL-3.0 + paid enterprise | Tool | No | Secrets, and it **verifies credentials are live** |
+| **gitleaks** | MIT | Tool | No | Secrets in git |
+| **detect-secrets** (Yelp) | Apache-2.0 | Tool | No | Secrets, baseline workflow |
+| **Hawk-Eye** | - | Tool, ~500 stars | No | Closest in shape: crawls filesystems, S3, Drive, Slack; OCR; JSON out |
+| **OpenDLP** | GPL | Tool | No | Data-at-rest discovery; unmaintained for over a decade |
+| **MyDLP** | GPL, Turkish origin | Suite | Partial | Acquired by Comodo 2014; community edition stale since |
+
+Read that table honestly and two things follow. Sentinel's secret
+detection is **behind** TruffleHog and gitleaks and always will be -
+they are dedicated, funded and years ahead, and TruffleHog's live
+credential verification is a capability Sentinel does not have at all.
+Sentinel's Turkish PII detection is **matched** by a Microsoft-backed
+MIT library.
+
+#### What is actually left, stated narrowly
+
+Three things survive that comparison, and only together:
+
+1. **It is a tool, not a library.** Presidio gives you a classifier.
+   Sentinel gives you a crawler, extractors for PDF/Office/ZIP/OCR, a
+   severity model, a risk score, six report formats, SARIF, a CI gate, a
+   pre-commit hook, encrypted quarantine with verified deletion, and a
+   desktop interface - `pip install` and one command. Building that
+   around Presidio is months of work that nobody in the Turkish
+   mid-market is going to do.
+2. **Depth of Turkish coverage, not its existence.** Presidio has two
+   Turkish entities. Sentinel has national ID, phone, plate, IBAN, plus
+   health-data indicators tied to KVKK art. 6. Neither has **VKN** (the
+   tax identification number), which is a concrete gap to close and a
+   defensible addition.
+3. **No model, no network.** Presidio's strength is NER, which means a
+   spaCy model and the weight that comes with it. Sentinel is
+   deterministic regex plus algorithmic validation: fast, reproducible,
+   explainable to an auditor, and genuinely air-gapped.
+
+The honest summary is that Sentinel's moat is **the workflow, not the
+detection**. Detection is a commodity with a free Microsoft-backed
+implementation. What is not commodity is the end-to-end path from "point
+it at a file share" to "here is a signed report an auditor accepts", in
+Turkish, on-premises, for a price a 200-person company will pay.
+
+Positioning should therefore be **KVKK compliance evidence for file
+estates**, not "Turkish PII detection". The first is defensible; the
+second is a feature Microsoft gives away.
 
 The buyer is a Turkish mid-market company - 50 to 500 employees,
 regulated or with regulated customers - that has VERBİS obligations, no
@@ -649,9 +727,14 @@ Deciding what not to do is most of the value of a roadmap.
   answer it clearly and stay on data at rest.
 - **No endpoint blocking.** Preventing a USB copy means a kernel driver,
   a support nightmare and liability for every machine that blue-screens.
-- **No chasing GitGuardian's rule count.** 450 generic token formats is
-  their moat, not a target. Depth in Turkish PII is defensible; breadth
-  in American SaaS tokens is not.
+- **No chasing GitGuardian's or TruffleHog's rule count.** Hundreds of
+  generic token formats is their moat, not a target, and Sentinel's
+  secret detection is already behind theirs. Recommend running gitleaks
+  or TruffleHog alongside Sentinel rather than pretending to replace
+  them - saying so openly costs nothing and buys credibility.
+- **No reimplementing Presidio.** It is MIT, Microsoft-backed and
+  already does checksum-validated TCKN. If the NLP path is ever needed,
+  depend on it; do not compete with it.
 - **No mobile app.** Nobody remediates a data leak from a phone.
 - **No marketplace or plugin ecosystem** before there are customers. It
   is a tax on every internal interface in exchange for contributions
@@ -665,7 +748,8 @@ Deciding what not to do is most of the value of a roadmap.
 |---|---|---|---|
 | Phase 5 skipped for phase 6 | **High** | **High** | Gate 6 on gate 5 and treat it as hard. This is the one that sinks the project. |
 | Detection quality turns out poor under measurement | Medium | High | Find out in 5.2, cheaply, before a customer does. |
-| A competitor adds Turkish PII validation | Low | High | The moat is shallow - a quarter's work for a funded team. Depth, local presence and compliance workflow are the real defence, not the regexes. |
+| A competitor has already added Turkish PII validation | **Certain - it has happened** | High | Presidio ships checksum-validated TCKN today (8.1). The detection moat does not exist. Compete on workflow, depth and local presence, and stop describing detection as a differentiator. |
+| TruffleHog or Hawk-Eye adds filesystem KVKK reporting | Low | **High** | This is the actual existential risk, not the PII regexes. Watch both releases. The defence is the compliance workflow and Turkish customer relationships, neither of which is in a repository. |
 | Solo maintainer bus factor | **High** | **High** | Documented architecture, high coverage, no undocumented deploy steps. This also directly governs valuation if the project is ever sold. |
 | Support burden exceeds capacity after first sales | Medium | Medium | Price in support from day one; cap the number of customers deliberately. |
 | False positive deletes a customer's file via quarantine | Low | **Severe** | Keep quarantine off by default, keep verified deletion, keep restore tested, add a dry-run mode and a mandatory retention window before any permanent purge. |
@@ -735,6 +819,9 @@ Market and regulatory figures are external and were current when this
 file was written. Both are quote-based or disputed; re-verify before
 using either in a commercial document.
 
+- Presidio Turkish recognizers - verified locally against presidio-analyzer 2.2.364; see also [supported entities](https://github.com/microsoft/presidio/blob/main/docs/supported_entities.md)
+- Open-source landscape survey - [Bytebase](https://www.bytebase.com/blog/top-open-source-sensitive-data-discovery-tools/), [Hawk-Eye](https://github.com/rohitcoder/hawk-eye)
+- MyDLP history and Comodo acquisition - [Wikipedia](https://en.wikipedia.org/wiki/MyDLP), [repository](https://github.com/mydlp/mydlp)
 - GitGuardian pricing model and contract ranges - [Vendr](https://www.vendr.com/marketplace/gitguardian)
 - Nightfall pricing model - [Nightfall](https://www.nightfall.ai/pricing), contract ranges - [Vendr](https://www.vendr.com/marketplace/nightfall)
 - KVKK 2026 administrative fines and the 25.49% revaluation - [Mondaq](https://www.mondaq.com/turkey/data-protection/1726256/2026-y%C4%B1l%C4%B1-kvkk-%C4%B0dari-para-cezalar%C4%B1-g%C3%BCncel-tutarlar-ve-uyar%C4%B1lar), [Köksal & Partners](https://www.koksalpartners.com/tr/kvkk-cezalari)
