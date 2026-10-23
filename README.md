@@ -388,8 +388,15 @@ main audience, the same way removing the national-ID validator would.
 
 ## Roadmap
 
-Diagnosis of the defects that were closed, and what is next:
-[ROADMAP.md](ROADMAP.md).
+[ROADMAP.md](ROADMAP.md) - diagnosis of the defects that were closed on
+the way from v3.0 to v4.0.
+
+[PRODUCT-ROADMAP.md](PRODUCT-ROADMAP.md) - where the project stands
+against its own claims (measured, not estimated), the corrections that
+come before any new feature, and the path from a command-line tool to a
+product. It opens with three things that are currently untrue, including
+a demonstration that fingerprints are reversible for low-entropy
+personal data when no salt is configured.
 
 ## Warning
 

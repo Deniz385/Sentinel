@@ -39,9 +39,13 @@ allowlist:
     - "tools/generate_data.py"
     # Sample leak files in the repository, there to try the tool out.
     - "test_data/**"
-    # Documentation describes rule names and example values.
+    # Documentation describes rule names and example values. The
+    # product roadmap additionally contains a worked demonstration that
+    # an unsalted fingerprint can be brute-forced, which needs a
+    # realistic-looking phone number to be worth reading.
     - "README.md"
     - "ROADMAP.md"
+    - "PRODUCT-ROADMAP.md"
     - "rules/**"
 
   rules: []

@@ -234,3 +234,12 @@ Six rules were renamed from Turkish to English identifiers
 valid in allowlists, in `--only` and `--skip-rules`, and in inline
 `sentinel:ignore` comments. Baselines, however, must be regenerated: a
 fingerprint is derived from `rule:value`, so renaming a rule changes it.
+
+---
+
+## 4. What comes next
+
+This document covers the work that is finished. The next phases - the
+corrections that have to land before any new feature, the move from a
+single command to a fleet, and the path to a commercial product - are in
+[PRODUCT-ROADMAP.md](PRODUCT-ROADMAP.md).
